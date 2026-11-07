@@ -1,0 +1,19 @@
+{
+  "name": "mafia-telegram-app",
+  "version": "1.0.0",
+  "description": "Telegram Mini App: Mafia o'yini",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "DEV_AUTH=1 node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "grammy": "^1.30.0",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,6 +1,6 @@
 # Rol rasmlari
 
-Har bir rol uchun shu papkaga `<rol>.jpg` qo'ying. Tik (vertikal) rasm, 3:4 nisbatda, masalan 600×800.
+Har bir rol uchun shu papkaga `<rol>.jpg` qo'ying. Yotiq rasm, 4:3 nisbatda, masalan 350×260 yoki 800×600.
 Rasm bo'lmasa, rolning emojisi ko'rinadi.
 
 | Fayl | Rol |

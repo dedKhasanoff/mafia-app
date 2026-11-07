@@ -202,6 +202,23 @@
   #timer.low::before { background: conic-gradient(var(--danger) calc(var(--p, 0) * 1%), transparent 0); }
   .spect { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-size: 12px; }
   .watch-banner { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+  /* ---------- Mikrofon ---------- */
+  #mic {
+    position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 15;
+    display: flex; align-items: center; gap: 10px; padding: 14px 22px; border-radius: 999px; border: 0; font: inherit; font-weight: 700;
+    background: var(--accent); color: #10131f; box-shadow: 0 6px 24px rgba(0,0,0,.35); white-space: nowrap;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; cursor: pointer;
+  }
+  #mic[hidden] { display: none; }
+  #mic .ico { font-size: 22px; }
+  #mic.rec { background: var(--danger); color: #fff; animation: pulse 1s infinite; }
+  #speaking {
+    position: fixed; left: 50%; top: calc(10px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 15;
+    background: var(--card); border: 1px solid var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600;
+  }
+  #speaking[hidden] { display: none; }
+  .player.talking { border-color: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 35%, transparent); }
+  body.has-mic #app { padding-bottom: 96px; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 </style>
 </head>
@@ -231,6 +248,8 @@
 </div>
 <div id="overlay"><div><div class="logo">🎭</div><div id="overlayText">Ulanmoqda…</div></div></div>
 <div id="toast"></div>
+<button id="mic" hidden><span class="ico">🎙</span><span id="micText">Bosib turib gapiring</span></button>
+<div id="speaking" hidden></div>
 
 <script>
 const tg = window.Telegram?.WebApp;
@@ -374,6 +393,8 @@ function connect() {
       $('overlay').hidden = true;
       if (prev && m.eventsId !== prev.eventsId) showScene(m);
       else render();
+    } else if (m.type === 'voice') {
+      playVoice(m);
     } else if (m.type === 'error') {
       if (m.code) { fatal = true; showOverlay(m.message); }
       else toast(m.message);
@@ -478,7 +499,7 @@ function hintText() {
     return me.choice ? `${base} Tanlovni o'zgartirish mumkin.` : base;
   }
   if (me.blocked) return "💃🏼 Ma'shuqa sizni band qildi — bugun ovoz bera olmaysiz.";
-  if (s.phase === 'day') return '🗣 Guruhda muhokama qiling: kim jinoyatchi?';
+  if (s.phase === 'day') return '🗣 Muhokama: kim jinoyatchi? 🎙 tugmasini bosib turib gapiring.';
   if (s.phase === 'vote') return me.choice ? "Ovozingiz qabul qilindi. Boshqasini bosib o'zgartirish mumkin." : "Kimni osamiz? O'yinchini bosing.";
   return '';
 }
@@ -547,6 +568,7 @@ function render() {
     const selectable = canTarget(p);
     if (selectable) c.classList.add('selectable');
     if (chosen.has(p.id)) c.classList.add('selected');
+    if (talkingId === p.id) c.classList.add('talking');
     c.append(avatar(p), el('div', 'name', p.id === me.id ? `${p.name} (siz)` : p.name));
 
     let tag = '';
@@ -586,7 +608,6 @@ function render() {
     if (me.id === s.hostId) button("▶️ O'yinni boshlash", () => sendMsg({ type: 'start' }), false, s.players.length < s.minPlayers);
     if (me.joined) button('Chiqish', () => sendMsg({ type: 'leave' }), true);
   }
-  if (s.phase === 'day' && me.id === s.hostId) button("⏭ Ovoz berishga o'tish", () => sendMsg({ type: 'skipDay' }), true);
   if (s.phase === 'vote' && me.canAct) {
     button(`🤷 Hech kim${s.skipVotes ? ` (${s.skipVotes})` : ''}`, () => sendMsg({ type: 'vote', target: 'skip' }), !me.choice?.skip);
   }
@@ -623,7 +644,136 @@ function render() {
   const log = $('log'); log.replaceChildren();
   for (const item of [...s.log].reverse()) log.append(el('li', '', item.text));
 
+  updateMic();
   tickTimer();
+}
+
+// ---------- Mikrofon: bosib gapirish ----------
+const MIC_MAX_MS = 20000;
+let micStream = null, recorder = null, recChunks = [], recStart = 0, recTimer = null, holding = false;
+let audioCtx = null;
+const voiceQueue = [];
+let talkingId = null, playing = false;
+
+// Telefonlarda ovoz faqat foydalanuvchi ekranga tekkandan keyin chiqadi
+document.addEventListener('pointerdown', () => {
+  try {
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch {}
+}, { capture: true });
+
+function pickMime() {
+  if (!window.MediaRecorder) return null;
+  for (const t of ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']) {
+    if (MediaRecorder.isTypeSupported?.(t)) return t;
+  }
+  return '';
+}
+
+function updateMic() {
+  const can = !!state?.me?.canSpeak;
+  $('mic').hidden = !can;
+  document.body.classList.toggle('has-mic', can);
+  if (!can) {
+    if (recorder?.state === 'recording') stopRec(true);
+    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  }
+}
+
+async function startRec() {
+  if (recorder?.state === 'recording') return;
+  const mime = pickMime();
+  if (mime == null || !navigator.mediaDevices?.getUserMedia) return toast("Bu qurilmada mikrofon ishlamaydi");
+  try {
+    micStream ||= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch {
+    return toast("Mikrofonga ruxsat bering");
+  }
+  if (!holding) return; // ruxsat so'ralayotganda barmoq qo'yib yuborildi
+  recChunks = [];
+  recorder = new MediaRecorder(micStream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32000 });
+  recorder.ondataavailable = (e) => e.data.size && recChunks.push(e.data);
+  recorder.onstop = sendRec;
+  recorder.start();
+  recStart = Date.now();
+  $('mic').classList.add('rec');
+  tg?.HapticFeedback?.impactOccurred('medium');
+  recTimer = setInterval(() => {
+    const left = Math.ceil((MIC_MAX_MS - (Date.now() - recStart)) / 1000);
+    $('micText').textContent = `Gapiryapsiz… ${left}s`;
+    if (left <= 0) stopRec();
+  }, 200);
+}
+
+function stopRec(discard) {
+  clearInterval(recTimer);
+  $('mic').classList.remove('rec');
+  $('micText').textContent = 'Bosib turib gapiring';
+  if (recorder?.state === 'recording') {
+    recorder.discard = !!discard || Date.now() - recStart < 500;
+    recorder.stop();
+  }
+}
+
+function sendRec() {
+  const r = this;
+  if (r.discard || !recChunks.length) return;
+  const blob = new Blob(recChunks, { type: r.mimeType || 'audio/webm' });
+  const fr = new FileReader();
+  fr.onload = () => {
+    const data = String(fr.result).split(',')[1];
+    sendMsg({ type: 'voice', mime: blob.type.replace(/\s+/g, ''), data });
+  };
+  fr.readAsDataURL(blob);
+}
+
+const mic = $('mic');
+mic.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  holding = true;
+  try { mic.setPointerCapture(e.pointerId); } catch {}
+  startRec();
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  mic.addEventListener(ev, () => { holding = false; stopRec(); });
+}
+mic.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function playVoice(m) {
+  voiceQueue.push(m);
+  if (!playing) playNext();
+}
+
+function setTalking(m) {
+  talkingId = m?.from ?? null;
+  $('speaking').hidden = !m;
+  if (m) $('speaking').textContent = `🔊 ${m.name} gapiryapti`;
+  if (state) render();
+}
+
+async function playNext() {
+  const m = voiceQueue.shift();
+  if (!m) { playing = false; return setTalking(null); }
+  playing = true;
+  setTalking(m);
+  const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
+  const done = () => setTimeout(playNext, 150);
+  try {
+    if (!audioCtx) throw new Error('no ctx');
+    const buf = await audioCtx.decodeAudioData(bytes.buffer.slice(0));
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.onended = done;
+    src.start();
+  } catch {
+    // Zaxira: oddiy audio element
+    const url = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
+    const a = new Audio(url);
+    a.onended = a.onerror = () => { URL.revokeObjectURL(url); done(); };
+    a.play().catch(() => { URL.revokeObjectURL(url); done(); });
+  }
 }
 
 function tickTimer() {

@@ -7,6 +7,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import { Bot, InlineKeyboard } from 'grammy';
 import { Game, GameError } from './game.js';
+import * as subs from './subs.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -62,6 +63,29 @@ function openButton(chatId) {
   return new InlineKeyboard().url('🎭 O\'yinni ochish', appLink(chatId));
 }
 
+// Obuna to'lovi uchun havola (Telegram Stars, har oy avtomatik yangilanadi)
+async function subscribeButton(chat) {
+  const link = await bot.api.raw.createInvoiceLink({
+    title: 'Mafia: guruh obunasi',
+    description: `«${(chat.title || 'Guruh').slice(0, 60)}» guruhi uchun 30 kunlik obuna. Guruhdagi hamma bepul o'ynaydi. Obuna har oy avtomatik yangilanadi.`,
+    payload: subs.payloadFor(chat.id),
+    currency: 'XTR',
+    prices: [{ label: '1 oy', amount: subs.SUB_PRICE }],
+    subscription_period: subs.SUB_PERIOD,
+  });
+  return new InlineKeyboard().url(`⭐ Obuna bo'lish — ${subs.SUB_PRICE} Stars / oy`, link);
+}
+
+async function offerSubscription(ctx, intro) {
+  const text = `${intro}\n\n⭐ Guruh obunasi: oyiga ${subs.SUB_PRICE} Telegram Stars. Bitta odam to'laydi, guruhdagi hamma bepul o'ynaydi.`;
+  try {
+    return await ctx.reply(text, { reply_markup: await subscribeButton(ctx.chat) });
+  } catch (e) {
+    console.error('createInvoiceLink:', e.description || e.message);
+    return ctx.reply(`${text}\n\n⚠️ To'lov havolasini yaratib bo'lmadi, keyinroq urinib ko'ring.`);
+  }
+}
+
 function createGame(chatId) {
   const game = new Game(chatId, {
     announce: (text, withButton) => {
@@ -90,6 +114,9 @@ if (BOT_TOKEN) {
     if (existing && existing.phase !== 'end') {
       return ctx.reply("O'yin allaqachon ochiq. Qo'shilish uchun tugmani bosing:", { reply_markup: openButton(ctx.chat.id) });
     }
+    if (!subs.isActive(ctx.chat.id)) {
+      return offerSubscription(ctx, "🔒 Bu guruhda o'yin ochish uchun obuna kerak.");
+    }
     if (existing) closeGame(existing);
     createGame(ctx.chat.id);
     return ctx.reply(
@@ -110,6 +137,45 @@ if (BOT_TOKEN) {
     game.stop();
     closeGame(game);
     return ctx.reply("⛔ O'yin to'xtatildi.");
+  });
+
+  bot.command('obuna', async (ctx) => {
+    if (!isGroup(ctx)) return ctx.reply("Obuna guruh uchun olinadi. Bu buyruqni guruhda yozing.");
+    if (subs.isFree(ctx.chat.id)) return ctx.reply("✅ Bu guruhda o'yin bepul.");
+    const until = subs.expiresAt(ctx.chat.id);
+    if (subs.isActive(ctx.chat.id)) {
+      return ctx.reply(`✅ Guruh obunasi faol: ${subs.formatDate(until)} gacha.\nObuna har oy avtomatik yangilanadi.`);
+    }
+    return offerSubscription(ctx, until ? `⌛ Obuna ${subs.formatDate(until)} da tugagan.` : "Bu guruhda obuna yo'q.");
+  });
+
+  bot.command('groupid', (ctx) => ctx.reply(`Guruh ID: ${ctx.chat.id}`));
+
+  // Telegram talabi: to'lov bo'yicha yordam buyrug'i
+  bot.command('paysupport', (ctx) => ctx.reply(
+    process.env.SUPPORT_TEXT || "To'lov bo'yicha savollar uchun bot egasiga yozing. Obunani Telegram sozlamalarida (Settings → My Stars) bekor qilish mumkin.",
+  ));
+
+  bot.on('pre_checkout_query', (ctx) => (subs.validPayload(ctx.preCheckoutQuery.invoice_payload)
+    ? ctx.answerPreCheckoutQuery(true)
+    : ctx.answerPreCheckoutQuery(false, { error_message: "Noto'g'ri to'lov" })));
+
+  bot.on('message:successful_payment', async (ctx) => {
+    const p = ctx.message.successful_payment;
+    const expires = p.subscription_expiration_date || Math.floor(Date.now() / 1000) + subs.SUB_PERIOD;
+    const chatId = subs.record(p.invoice_payload, expires);
+    if (!chatId) return;
+    const until = subs.formatDate(expires * 1000);
+    const renewal = p.is_recurring && !p.is_first_recurring;
+    const who = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ');
+    console.log(`To'lov: guruh ${chatId}, ${p.total_amount} Stars, ${until} gacha${renewal ? ' (yangilanish)' : ''}`);
+    await ctx.reply(`✅ Rahmat! Guruh obunasi ${until} gacha ${renewal ? 'uzaytirildi' : 'faollashtirildi'}.`).catch(() => {});
+    if (String(ctx.chat.id) !== chatId) {
+      const text = renewal
+        ? `🔄 Guruh obunasi ${until} gacha uzaytirildi.`
+        : `⭐ ${who} guruh obunasini faollashtirdi (${until} gacha). Endi /newgame bilan o'yin ochish mumkin!`;
+      bot.api.sendMessage(chatId, text).catch((e) => console.error('sendMessage:', e.description || e.message));
+    }
   });
 
   bot.catch((err) => console.error('Bot xatosi:', err.error?.message || err.message));
@@ -136,12 +202,30 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, games: games.size }));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 512 * 1024 });
 
 const send = (ws, msg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
 
 function broadcast(game) {
   for (const ws of game.clients) send(ws, game.viewFor(ws.user.id));
+}
+
+// Bosib gapirish: yozilgan ovozni o'yindagi hammaga yuboramiz (xotirada saqlanmaydi)
+const VOICE_MIME = /^audio\/(webm|ogg|mp4|aac|mpeg)(;\s*codecs=[\w.,"\s-]+)?$/;
+const VOICE_MAX = 400 * 1024; // base64 uzunligi, ~20 soniyalik yozuv
+function relayVoice(ws, msg) {
+  const { game, user } = ws;
+  if (!game.canSpeak(user.id)) throw new GameError('Hozir gapira olmaysiz');
+  const mime = String(msg.mime || '');
+  const data = String(msg.data || '');
+  if (!VOICE_MIME.test(mime) || !data || data.length > VOICE_MAX || !/^[A-Za-z0-9+/=]+$/.test(data)) {
+    throw new GameError("Ovozli xabar noto'g'ri");
+  }
+  const now = Date.now();
+  if (now - (ws.lastVoice || 0) < 1500) throw new GameError('Biroz kuting');
+  ws.lastVoice = now;
+  const out = JSON.stringify({ type: 'voice', from: user.id, name: user.name, mime, data });
+  for (const c of game.clients) if (c !== ws && c.readyState === c.OPEN) c.send(out);
 }
 
 function handle(ws, msg) {
@@ -180,7 +264,7 @@ function handle(ws, msg) {
     case 'join': return game.join(user);
     case 'leave': return game.leave(user.id);
     case 'start': return game.start(user.id);
-    case 'skipDay': return game.skipDay(user.id);
+    case 'voice': return relayVoice(ws, msg);
     case 'act': {
       const targets = Array.isArray(msg.targets) ? msg.targets.slice(0, 2) : [msg.target];
       return game.act(user.id, targets, msg.mode);
@@ -226,6 +310,11 @@ server.listen(PORT, async () => {
   if (bot) {
     const me = await bot.api.getMe();
     botUsername = me.username;
+    if (subs.SUBS_ENABLED) {
+      subs.loadFromTelegram(bot.api)
+        .then((n) => console.log(`Obunalar tiklandi: ${n} ta to'lov`))
+        .catch((e) => console.error('getStarTransactions:', e.description || e.message));
+    }
     bot.start({ onStart: () => console.log(`Bot @${botUsername} ishga tushdi`) });
   }
 });

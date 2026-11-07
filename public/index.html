@@ -36,21 +36,43 @@
   #timer:empty { display: none; }
   @keyframes pulse { 50% { transform: scale(1.06); } }
 
-  .rolecard { perspective: 900px; margin-bottom: 14px; cursor: pointer; user-select: none; }
-  .rolecard-inner { display: grid; transition: transform .5s; transform-style: preserve-3d; }
-  .rolecard.open .rolecard-inner { transform: rotateY(180deg); }
-  .face {
-    grid-area: 1 / 1; backface-visibility: hidden; -webkit-backface-visibility: hidden; border-radius: 18px; padding: 14px 16px;
-    display: flex; align-items: center; gap: 14px; border: 1px solid var(--line); min-height: 92px;
+  /* Rol kartasi: doim ochiq */
+  .rolecard {
+    margin-bottom: 14px; border-radius: 18px; padding: 12px 14px; display: flex; align-items: center; gap: 14px;
+    border: 1px solid var(--line); background: var(--card); min-height: 92px;
   }
-  .front { background: repeating-linear-gradient(45deg, var(--card), var(--card) 10px, var(--bg2) 10px, var(--bg2) 20px); justify-content: center; color: var(--muted); font-weight: 600; }
-  .back { background: var(--card); transform: rotateY(180deg); }
-  .back .big { font-size: 40px; flex: none; }
-  .back b { font-size: 18px; display: block; margin-bottom: 2px; }
-  .back small { color: var(--muted); font-size: 13px; display: block; }
-  .side-mafia .back { background: linear-gradient(135deg, #4a1420, var(--card)); }
-  .side-qotil .back { background: linear-gradient(135deg, #3b1a4a, var(--card)); }
-  .side-suidsid .back { background: linear-gradient(135deg, #3d3a14, var(--card)); }
+  .rolecard[hidden] { display: none; }
+  .rolepic { width: 68px; height: 68px; flex: none; border-radius: 14px; overflow: hidden; display: grid; place-items: center; font-size: 42px; background: rgba(0,0,0,.18); }
+  .rolepic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .rolecard b { font-size: 18px; display: block; margin-bottom: 2px; }
+  .rolecard small { color: var(--muted); font-size: 13px; display: block; }
+  .side-mafia { background: linear-gradient(135deg, #4a1420, var(--card)); }
+  .side-qotil { background: linear-gradient(135deg, #3b1a4a, var(--card)); }
+  .side-suidsid { background: linear-gradient(135deg, #3d3a14, var(--card)); }
+
+  /* O'yin boshida katta rol kartasi */
+  #reveal {
+    position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px;
+    background: rgba(5,7,16,.82); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    transition: background .5s;
+  }
+  #reveal[hidden] { display: none; }
+  #reveal.leaving { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; pointer-events: none; }
+  .bigcard {
+    width: min(82vw, 340px); border-radius: 22px; overflow: hidden; background: var(--card); color: #fff;
+    border: 2px solid var(--gold); box-shadow: 0 0 60px rgba(255,198,92,.35); text-align: center;
+    transform-origin: top left; animation: deal .8s cubic-bezier(.2,.9,.3,1.2) both;
+    transition: transform .6s cubic-bezier(.5,0,.2,1), opacity .6s;
+  }
+  .bigcard.side-mafia { border-color: var(--danger); box-shadow: 0 0 60px rgba(255,93,108,.4); }
+  .bigcard.side-qotil { border-color: #b45cff; box-shadow: 0 0 60px rgba(180,92,255,.4); }
+  .bigpic { aspect-ratio: 3 / 4; display: grid; place-items: center; font-size: 120px; background: rgba(0,0,0,.25); }
+  .bigpic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bigtext { padding: 14px 16px 18px; }
+  .bigtext .you { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; opacity: .7; }
+  .bigtext b { display: block; font-size: 26px; margin: 2px 0 6px; }
+  .bigtext small { display: block; font-size: 13px; opacity: .8; }
+  @keyframes deal { from { opacity: 0; transform: translateY(60px) rotate(-8deg) scale(.6); } to { opacity: 1; transform: none; } }
 
   #hint { background: var(--bg2); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; margin-bottom: 14px; }
   #hint:empty { display: none; }
@@ -232,10 +254,8 @@
   </header>
   <div id="winner"></div>
   <div id="rolecard" class="rolecard" hidden>
-    <div class="rolecard-inner">
-      <div class="face front">🂠 Rolingizni ko'rish uchun bosing</div>
-      <div class="face back"><div class="big" id="roleEmoji"></div><div><b id="roleName"></b><small id="roleInfo"></small></div></div>
-    </div>
+    <div class="rolepic" id="rolePic"></div>
+    <div><b id="roleName"></b><small id="roleInfo"></small></div>
   </div>
   <div id="watch" class="watch-banner" hidden>👀 Siz tomosha qilyapsiz. Yangi o'yinga guruhda /newgame orqali qo'shilasiz.</div>
   <div id="hint"></div>
@@ -248,6 +268,7 @@
 </div>
 <div id="overlay"><div><div class="logo">🎭</div><div id="overlayText">Ulanmoqda…</div></div></div>
 <div id="toast"></div>
+<div id="reveal" hidden></div>
 <button id="mic" hidden><span class="ico">🎙</span><span id="micText">Bosib turib gapiring</span></button>
 <div id="speaking" hidden></div>
 
@@ -393,6 +414,8 @@ function connect() {
       $('overlay').hidden = true;
       if (prev && m.eventsId !== prev.eventsId) showScene(m);
       else render();
+      // Rol berilganda yoki o'zgarganda (masalan, Serjant → Komissar) katta karta chiqadi
+      if (prev && m.me.role && m.me.role !== prev.me.role) showReveal(m.me.role);
     } else if (m.type === 'voice') {
       playVoice(m);
     } else if (m.type === 'error') {
@@ -532,8 +555,11 @@ function render() {
   rc.hidden = !me.role;
   if (me.role) {
     const r = s.roles[me.role];
-    rc.className = `rolecard side-${r.side}` + (rc.classList.contains('open') ? ' open' : '');
-    $('roleEmoji').textContent = r.emoji;
+    rc.className = `rolecard side-${r.side}`;
+    if ($('rolePic').dataset.role !== me.role) {
+      $('rolePic').dataset.role = me.role;
+      $('rolePic').replaceChildren(rolePicture(me.role, r.emoji));
+    }
     $('roleName').textContent = r.name;
     $('roleInfo').textContent = r.info;
   }
@@ -786,7 +812,53 @@ function tickTimer() {
 }
 setInterval(tickTimer, 250);
 
-$('rolecard').onclick = () => { $('rolecard').classList.toggle('open'); tg?.HapticFeedback?.impactOccurred('medium'); };
+// ---------- Rol rasmi va katta karta ----------
+// Rasmlar: public/roles/<rol>.jpg (masalan, don.jpg). Rasm bo'lmasa, emoji ko'rinadi.
+function rolePicture(role, emoji) {
+  const img = new Image();
+  img.alt = '';
+  img.src = `/roles/${role}.jpg`;
+  const wrap = document.createDocumentFragment();
+  img.onerror = () => img.replaceWith(document.createTextNode(emoji));
+  wrap.append(img);
+  return wrap;
+}
+
+let revealTimer = null;
+function showReveal(role) {
+  const r = state.roles[role];
+  const box = $('reveal');
+  const card = el('div', `bigcard side-${r.side}`);
+  const pic = el('div', 'bigpic');
+  pic.append(rolePicture(role, r.emoji));
+  const text = el('div', 'bigtext');
+  text.append(el('div', 'you', 'Sizning rolingiz'), el('b', '', `${r.emoji} ${r.name}`), el('small', '', r.info));
+  card.append(pic, text);
+  box.className = '';
+  box.replaceChildren(card);
+  box.hidden = false;
+  tg?.HapticFeedback?.notificationOccurred('success');
+  clearTimeout(revealTimer);
+  revealTimer = setTimeout(hideReveal, 5000);
+}
+
+// Katta karta kichrayib, sahifadagi rol kartasi joyiga uchib tushadi
+function hideReveal() {
+  clearTimeout(revealTimer);
+  const box = $('reveal');
+  const card = box.firstChild;
+  if (box.hidden || !card || box.classList.contains('leaving')) return;
+  box.classList.add('leaving');
+  card.style.animation = 'none'; // aks holda animatsiya transform'ni bosib qo'yadi
+  const from = card.getBoundingClientRect();
+  const target = $('rolecard').hidden ? null : $('rolePic').getBoundingClientRect();
+  if (target && target.width) {
+    card.style.transform = `translate(${target.left - from.left}px, ${target.top - from.top}px) scale(${target.width / from.width})`;
+  }
+  card.style.opacity = '0';
+  setTimeout(() => { box.hidden = true; box.replaceChildren(); }, 620);
+}
+$('reveal').onclick = hideReveal;
 
 connect();
 </script>

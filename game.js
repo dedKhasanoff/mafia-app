@@ -9,6 +9,8 @@ const DUR = {
   kamikaze: Number(process.env.KAMIKAZE_SEC || 20),
 };
 const LUCKY_CHANCE = 0.7;
+// TEST_BOTS=1: o'yin egasi lobbida sun'iy o'yinchilar qo'sha oladi (sinash uchun)
+export const TEST_BOTS = process.env.TEST_BOTS === '1';
 const MAX_ROUNDS = 40;
 
 // side: g'alaba uchun jamoa. Jurnalist ham shu bo'yicha solishtiradi.
@@ -90,6 +92,7 @@ export class Game {
     this.eventsId = 0;
     this.phaseTotal = 0;
     this.clients = new Set();   // ulangan WebSocket'lar (server to'ldiradi)
+    this.botSeq = 0;
   }
 
   get alive() { return [...this.players.values()].filter((p) => p.alive); }
@@ -132,6 +135,45 @@ export class Game {
     if (!this.hostId) this.hostId = user.id;
     this.addLog(`${user.name} qo'shildi`);
     this.onChange();
+  }
+
+  // Sinov boti: id manfiy, tunda va ovozda o'zi tasodifiy tanlaydi
+  addBot(id) {
+    if (!TEST_BOTS) throw new GameError("Test botlari o'chirilgan");
+    if (id !== this.hostId) throw new GameError("Faqat o'yin egasi bot qo'sha oladi");
+    this.botSeq++;
+    this.join({ id: -this.botSeq, name: `🤖 Bot ${this.botSeq}` });
+    this.players.get(-this.botSeq).bot = true;
+  }
+
+  // Botlar biroz "o'ylab" turib harakat qiladi
+  botsPlay() {
+    const phase = this.phase;
+    const round = this.round;
+    const later = (fn) => setTimeout(() => {
+      if (this.phase !== phase || this.round !== round) return;
+      try { fn(); } catch { /* bot noto'g'ri tanlasa, shunchaki o'tkazib yuboramiz */ }
+    }, 2000 + Math.random() * 6000);
+    const bots = this.alive.filter((p) => p.bot);
+    for (const b of bots) {
+      const others = () => this.alive.filter((p) => p.id !== b.id);
+      if (phase === 'night' && NIGHT_ROLES.has(b.role)) {
+        later(() => {
+          let pool = others();
+          if (SHOOTERS.has(b.role)) pool = pool.filter((p) => !MAFIA_TEAM.has(p.role));
+          if (!pool.length) return;
+          const n = b.role === 'jurnalist' ? 2 : 1;
+          const targets = [...pool].sort(() => Math.random() - 0.5).slice(0, n).map((p) => p.id);
+          if (targets.length === n) this.act(b.id, targets, Math.random() < 0.5 ? 'check' : 'shoot');
+        });
+      }
+      if (phase === 'vote' && b.id !== this.dayBlocked) {
+        later(() => this.castVote(b.id, Math.random() < 0.2 ? 'skip' : pick(others()).id));
+      }
+      if (phase === 'kamikaze' && b.id === this.kamikazeId) {
+        later(() => this.kamikazeTake(b.id, pick(others()).id));
+      }
+    }
   }
 
   leave(id) {
@@ -177,6 +219,7 @@ export class Game {
     this.addLog(`🌙 ${this.round}-tun boshlandi`, false);
     this.announce(`🌙 ${this.round}-tun. Shahar uxlaydi...`);
     this.schedule(DUR.night, () => this.resolveNight());
+    this.botsPlay();
     this.onChange();
   }
 
@@ -351,6 +394,7 @@ export class Game {
     this.addLog('🗳 Ovoz berish boshlandi', false);
     this.announce('🗳 Ovoz berish boshlandi! Ilovada kimni osishni tanlang.', true);
     this.schedule(DUR.vote, () => this.resolveVote());
+    this.botsPlay();
     this.onChange();
   }
 
@@ -401,6 +445,7 @@ export class Game {
       this.beginPhase('kamikaze');
       this.announce(msg, true);
       this.schedule(DUR.kamikaze, () => this.resolveKamikaze(null));
+      this.botsPlay();
       return this.onChange();
     } else {
       lynched.alive = false;
@@ -578,6 +623,7 @@ export class Game {
       hostId: this.hostId,
       minPlayers: MIN_PLAYERS,
       maxPlayers: MAX_PLAYERS,
+      testBots: TEST_BOTS,
       winner: this.winner,
       kamikazeId: this.kamikazeId,
       roles: ROLES,

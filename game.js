@@ -67,10 +67,11 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 export class GameError extends Error {}
 
 export class Game {
-  constructor(chatId, { announce = () => {}, onChange = () => {} } = {}) {
+  constructor(chatId, { announce = () => {}, onChange = () => {}, onEnd = () => {} } = {}) {
     this.chatId = chatId;
     this.announce = announce;   // guruhga xabar: (text, withButton) => void
     this.onChange = onChange;   // holat o'zgarganda chaqiriladi
+    this.onEnd = onEnd;         // o'yin g'olib bilan tugaganda (mukofot uchun)
     this.players = new Map();   // id -> {id, name, photo, alive, role}
     this.hostId = null;
     this.phase = 'lobby';       // lobby | night | day | vote | kamikaze | end
@@ -78,7 +79,7 @@ export class Game {
     this.deadline = null;
     this.timer = null;
     this.actions = new Map();   // tunda: uid -> {targets: [id], mode}
-    this.votes = new Map();     // kunduzi: uid -> id | 'skip'
+    this.votes = new Map();     // kunduzi: uid -> id
     this.checks = [];           // komissar tekshiruvlari: {round, target, role, revealed}
     this.notes = new Map();     // shaxsiy xabarlar: uid -> [{round, text}]
     this.dayBlocked = null;     // Ma'shuqa band qilgan odam (shu kuni ovoz bermaydi)
@@ -168,7 +169,7 @@ export class Game {
         });
       }
       if (phase === 'vote' && b.id !== this.dayBlocked) {
-        later(() => this.castVote(b.id, Math.random() < 0.2 ? 'skip' : pick(others()).id));
+        later(() => this.castVote(b.id, pick(others()).id));
       }
       if (phase === 'kamikaze' && b.id === this.kamikazeId) {
         later(() => this.kamikazeTake(b.id, pick(others()).id));
@@ -227,6 +228,7 @@ export class Game {
     if (this.phase !== 'night') throw new GameError("Hozir tun emas");
     const p = this.players.get(id);
     if (!p || !p.alive || !NIGHT_ROLES.has(p.role)) throw new GameError("Sizda tungi harakat yo'q");
+    if (this.actions.has(id)) throw new GameError("Tanlov qilingan, uni o'zgartirib bo'lmaydi");
     const need = p.role === 'jurnalist' ? 2 : 1;
     targets = [...new Set((targets || []).map(Number))];
     if (targets.length !== need) throw new GameError(need === 2 ? 'Ikki kishini tanlang' : 'Bitta odamni tanlang');
@@ -403,11 +405,10 @@ export class Game {
     const p = this.players.get(id);
     if (!p || !p.alive) throw new GameError("Faqat tirik o'yinchilar ovoz beradi");
     if (id === this.dayBlocked) throw new GameError("💃🏼 Ma'shuqa sizni band qilgan, bugun ovoz bera olmaysiz");
-    if (target !== 'skip') {
-      const t = this.players.get(target);
-      if (!t || !t.alive) throw new GameError("Bu o'yinchi tirik emas");
-      if (t.id === id) throw new GameError("O'zingizga ovoz bera olmaysiz");
-    }
+    if (this.votes.has(id)) throw new GameError("Ovoz berilgan, uni o'zgartirib bo'lmaydi");
+    const t = this.players.get(target);
+    if (!t || !t.alive) throw new GameError("Bu o'yinchi tirik emas");
+    if (t.id === id) throw new GameError("O'zingizga ovoz bera olmaysiz");
     // Ovoz berish ham hamma ovoz bersa ham vaqt tugaguncha davom etadi
     this.votes.set(id, target);
     this.onChange();
@@ -424,18 +425,24 @@ export class Game {
     // Ochiq ovozlar: kim kimga ovoz bergani guruhga ham yuboriladi
     if (this.votes.size) {
       const lines = [...this.votes].map(([uid, t]) =>
-        `${this.players.get(uid).name} → ${t === 'skip' ? '🤷 Hech kim' : this.players.get(t).name}`);
+        `${this.players.get(uid).name} → ${this.players.get(t).name}`);
       this.announce(`🗳 Ovozlar:\n${lines.join('\n')}`);
     }
+    // Eng ko'p ovoz olgan osiladi; teng bo'lsa, ular orasidan qur'a tashlanadi
     let lynched = null;
     if (tally.size) {
       const top = Math.max(...tally.values());
       const leaders = [...tally].filter(([, k]) => k === top).map(([t]) => t);
-      if (leaders.length === 1 && leaders[0] !== 'skip') lynched = this.players.get(leaders[0]);
+      lynched = this.players.get(pick(leaders));
+      if (leaders.length > 1) {
+        const msg = `🎲 Ovozlar teng bo'ldi (${leaders.map((id) => this.players.get(id).name).join(', ')}). Qur'a ${lynched.name}ga tushdi.`;
+        this.addLog(msg);
+        this.announce(msg);
+      }
     }
 
     if (!lynched) {
-      const msg = tally.size ? "⚖️ Shahar kelisha olmadi — hech kim osilmadi." : '⚖️ Hech kim ovoz bermadi.';
+      const msg = '⚖️ Hech kim ovoz bermadi — hech kim osilmadi.';
       this.addLog(msg);
       this.announce(msg);
     } else if (lynched.role === 'kamikadze') {
@@ -524,6 +531,7 @@ export class Game {
       if (winner === 'qotil' && p.role === 'qotil' && p.alive) this.winners.add(p.id);
     }
     for (const id of this.suidsidWon) this.winners.add(id);
+    this.onEnd(this);
 
     const titles = {
       civil: "🎉 Tinch aholi g'alaba qozondi!",
@@ -586,11 +594,8 @@ export class Game {
 
     const voteCount = new Map();
     const votersOf = new Map(); // nishon -> unga ovoz berganlar
-    let skipVotes = 0;
-    const skipVoters = [];
     if (this.phase === 'vote') {
       for (const [from, t] of this.votes) {
-        if (t === 'skip') { skipVotes++; skipVoters.push(from); continue; }
         voteCount.set(t, (voteCount.get(t) || 0) + 1);
         if (!votersOf.has(t)) votersOf.set(t, []);
         votersOf.get(t).push(from);
@@ -608,7 +613,7 @@ export class Game {
     if (this.phase === 'night' && this.actions.has(uid)) choice = this.actions.get(uid);
     if (this.phase === 'vote' && this.votes.has(uid)) {
       const v = this.votes.get(uid);
-      choice = v === 'skip' ? { skip: true, targets: [] } : { targets: [v] };
+      choice = { targets: [v] };
     }
 
     return {
@@ -649,8 +654,6 @@ export class Game {
         winner: ended && this.winners.has(p.id),
         hero: ended && this.isHero(p),
       })),
-      skipVotes,
-      skipVoters,
       teamPicks: MAFIA_TEAM.has(myRole) && this.phase === 'night'
         ? [...this.actions].filter(([u]) => u !== uid && SHOOTERS.has(this.players.get(u).role))
           .map(([from, a]) => ({ from, target: a.targets[0], don: this.players.get(from).role === 'don' }))

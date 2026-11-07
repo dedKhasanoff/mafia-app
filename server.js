@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import { Bot, InlineKeyboard } from 'grammy';
 import { Game, GameError } from './game.js';
 import * as subs from './subs.js';
+import * as db from './db.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -94,6 +95,7 @@ function createGame(chatId) {
         .catch((e) => console.error('sendMessage:', e.description || e.message));
     },
     onChange: () => broadcast(game),
+    onEnd: (g) => rewardWinners(g),
   });
   games.set(String(chatId), game);
   return game;
@@ -149,6 +151,13 @@ if (BOT_TOKEN) {
     return offerSubscription(ctx, until ? `⌛ Obuna ${subs.formatDate(until)} da tugagan.` : "Bu guruhda obuna yo'q.");
   });
 
+  bot.command(['balans', 'balance'], async (ctx) => {
+    if (!db.COINS_ENABLED) return ctx.reply('YM coin hali yoqilmagan.');
+    const coins = await db.getCoins(ctx.from.id).catch(() => null);
+    if (coins == null) return ctx.reply("Balansni o'qib bo'lmadi, keyinroq urinib ko'ring.");
+    return ctx.reply(`🪙 ${ctx.from.first_name}, balansingiz: ${coins} YM coin`);
+  });
+
   bot.command('groupid', (ctx) => ctx.reply(`Guruh ID: ${ctx.chat.id}`));
 
   // Telegram talabi: to'lov bo'yicha yordam buyrug'i
@@ -179,6 +188,26 @@ if (BOT_TOKEN) {
   });
 
   bot.catch((err) => console.error('Bot xatosi:', err.error?.message || err.message));
+}
+
+// G'oliblarga YM coin. Test botlari bor o'yinda mukofot berilmaydi (aks holda coin yig'ib olish oson).
+async function rewardWinners(game) {
+  if (!db.COINS_ENABLED || !game.winners.size) return;
+  const players = [...game.players.values()];
+  if (players.some((p) => p.bot)) {
+    game.announce("🤖 O'yinda test botlari bor edi, shuning uchun YM coin berilmadi.");
+    return;
+  }
+  const winners = players.filter((p) => game.winners.has(p.id));
+  try {
+    const balances = await db.award(winners);
+    game.announce(`🪙 G'oliblar ${db.COIN_REWARD} YM coin oldi:\n${winners.map((w) => `${w.name} — jami ${balances.get(w.id)} YM`).join('\n')}`);
+    for (const ws of game.clients) {
+      if (balances.has(ws.user.id)) send(ws, { type: 'coins', coins: balances.get(ws.user.id), gained: db.COIN_REWARD });
+    }
+  } catch (e) {
+    console.error('Coin berishda xato:', e.message);
+  }
 }
 
 function closeGame(game) {
@@ -255,6 +284,9 @@ function handle(ws, msg) {
     ws.user = user;
     ws.game = game;
     game.clients.add(ws);
+    if (db.COINS_ENABLED) {
+      db.getCoins(user.id).then((coins) => send(ws, { type: 'coins', coins })).catch(() => {});
+    }
     return broadcast(game); // tomoshabinlar soni yangilansin
   }
 
@@ -270,7 +302,7 @@ function handle(ws, msg) {
       const targets = Array.isArray(msg.targets) ? msg.targets.slice(0, 2) : [msg.target];
       return game.act(user.id, targets, msg.mode);
     }
-    case 'vote': return game.castVote(user.id, msg.target === 'skip' ? 'skip' : Number(msg.target));
+    case 'vote': return game.castVote(user.id, Number(msg.target));
     case 'kamikaze': return game.kamikazeTake(user.id, Number(msg.target));
     case 'reveal': return game.reveal(user.id, msg.index);
     default: return undefined;
@@ -305,6 +337,10 @@ setInterval(() => {
     ws.ping();
   }
 }, 25000);
+
+if (db.COINS_ENABLED) {
+  db.init().then(() => console.log('YM coin: baza ulandi')).catch((e) => console.error('Baza xatosi:', e.message));
+}
 
 server.listen(PORT, async () => {
   console.log(`Server ${PORT}-portda ishlayapti${DEV_AUTH ? ' (DEV_AUTH yoqilgan!)' : ''}`);

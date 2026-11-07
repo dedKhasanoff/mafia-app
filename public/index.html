@@ -147,6 +147,25 @@
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
   #toast.ok { background: var(--ok); color: #0b1a12; }
+  .coins { cursor: pointer; }
+  #shop {
+    position: fixed; inset: 0; z-index: 35; background: rgba(5,7,16,.6); display: flex; align-items: flex-end; justify-content: center;
+  }
+  #shop[hidden] { display: none; }
+  .sheet {
+    width: 100%; max-width: 560px; background: var(--bg2); border: 1px solid var(--line); border-bottom: 0;
+    border-radius: 20px 20px 0 0; padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); animation: up .3s ease-out;
+  }
+  @keyframes up { from { transform: translateY(100%); } }
+  .sheet h2 { margin: 0 0 4px; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .sheet .bal { color: var(--gold); font-size: 14px; }
+  .sheet .note { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .item { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  .item .t { flex: 1; }
+  .item b { display: block; font-size: 15px; }
+  .item small { color: var(--muted); font-size: 12px; display: block; }
+  .item .own { color: var(--ok); font-size: 12px; font-weight: 700; }
+  .item button { flex: none; min-width: 92px; }
   .coins { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--gold) 22%, var(--card)); border: 1px solid var(--gold); font-size: 12px; font-weight: 700; }
 
   /* ---------- Fon: osmon ---------- */
@@ -271,6 +290,7 @@
 <div id="overlay"><div><div class="logo">🎭</div><div id="overlayText">Ulanmoqda…</div></div></div>
 <div id="toast"></div>
 <div id="reveal" hidden></div>
+<div id="shop" hidden><div class="sheet" id="sheet"></div></div>
 <button id="mic" hidden><span class="ico">🎙</span><span id="micText">Bosib turib gapiring</span></button>
 <div id="speaking" hidden></div>
 
@@ -282,6 +302,7 @@ tg?.expand();
 const $ = (id) => document.getElementById(id);
 let state = null, endAt = null, ws = null, retry = 0, fatal = false;
 let myCoins = null;      // YM coin balansi (baza ulangan bo'lsa)
+let myItems = {}, shopList = null;
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
@@ -419,10 +440,15 @@ function connect() {
       else render();
       // Rol berilganda yoki o'zgarganda (masalan, Serjant → Komissar) katta karta chiqadi
       if (prev && m.me.role && m.me.role !== prev.me.role) showReveal(m.me.role);
-    } else if (m.type === 'coins') {
+    } else if (m.type === 'profile') {
       myCoins = m.coins;
+      myItems = m.items || {};
+      shopList = m.shop || shopList;
       if (m.gained) toast(`🪙 +${m.gained} YM coin! Balans: ${m.coins}`, true);
       if (state) render();
+      renderShop();
+    } else if (m.type === 'bought') {
+      toast(`✅ Sotib olindi: ${m.item}`, true);
     } else if (m.type === 'voice') {
       playVoice(m);
     } else if (m.type === 'error') {
@@ -547,7 +573,11 @@ function render() {
   const alive = s.players.filter((p) => p.alive).length;
   $('sub').textContent = s.phase === 'lobby' ? `${s.players.length} / ${s.maxPlayers} o'yinchi` : `Tirik: ${alive} / ${s.players.length}`;
   if (s.spectators) $('sub').append(el('span', 'spect', `👀 ${s.spectators}`));
-  if (myCoins != null) $('sub').append(el('span', 'coins', `🪙 ${myCoins} YM`));
+  if (myCoins != null) {
+    const c = el('span', 'coins', `🪙 ${myCoins} YM · 🛒`);
+    c.onclick = openShop;
+    $('sub').append(c);
+  }
 
   // G'olib
   const w = $('winner'); w.replaceChildren();
@@ -674,6 +704,7 @@ function render() {
   for (const item of [...s.log].reverse()) log.append(el('li', '', item.text));
 
   updateMic();
+  renderShop();
   tickTimer();
 }
 
@@ -814,6 +845,39 @@ function tickTimer() {
   if (state?.duration) t.style.setProperty('--p', Math.max(0, Math.min(100, ((endAt - Date.now()) / state.duration) * 100)));
 }
 setInterval(tickTimer, 250);
+
+// ---------- Do'kon ----------
+function openShop() {
+  tg?.HapticFeedback?.impactOccurred('light');
+  $('shop').hidden = false;
+  renderShop();
+}
+$('shop').onclick = (e) => { if (e.target === $('shop')) $('shop').hidden = true; };
+
+function renderShop() {
+  if ($('shop').hidden || !shopList) return;
+  const sh = $('sheet'); sh.replaceChildren();
+  const h = el('h2', '', "🛒 Do'kon");
+  h.append(el('span', 'bal', `🪙 ${myCoins ?? 0} YM`));
+  sh.append(h, el('div', 'note', "Buyumlar kerak bo'lganda o'zi ishlatiladi. Har biri bir marta ishlaydi. O'yin davomida sotib olib bo'lmaydi."));
+  const me = state?.players.find((p) => p.id === state.me.id);
+  const inGame = me?.alive && !['lobby', 'end'].includes(state.phase);
+  for (const [key, it] of Object.entries(shopList)) {
+    const row = el('div', 'item');
+    const t = el('div', 't');
+    t.append(el('b', '', it.name), el('small', '', it.info));
+    if (myItems[key]) t.append(el('span', 'own', `Sizda: ${myItems[key]} ta`));
+    const b = el('button', 'btn small', `${it.price} YM`);
+    b.disabled = inGame || (myCoins ?? 0) < it.price;
+    b.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'buy', item: key }); };
+    row.append(t, b);
+    sh.append(row);
+  }
+  const close = el('button', 'btn ghost', 'Yopish');
+  close.style.width = '100%'; close.style.marginTop = '10px';
+  close.onclick = () => { $('shop').hidden = true; };
+  sh.append(close);
+}
 
 // ---------- Rol rasmi va katta karta ----------
 // Rasmlar: public/roles/<rol>.jpg (masalan, don.jpg). Rasm bo'lmasa, emoji ko'rinadi.

@@ -61,17 +61,23 @@ const MAFIA_TEAM = new Set(['don', 'mafia', 'advokat']);
 const SHOOTERS = new Set(['don', 'mafia']);
 const NIGHT_ROLES = new Set(['don', 'mafia', 'advokat', 'komissar', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'jurnalist', 'qotil']);
 const KOM_TEAM = new Set(['komissar', 'serjant']);
+// Soxta hujjat Komissarga shu rollardan birini ko'rsatadi
+const FAKE_ROLES = ['civil', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'omadli', 'jurnalist', 'mer', 'serjant'];
+// Ketma-ket shuncha o'yinda 1-tunda o'ldirilgan o'yinchi navbatdagi 1-tunda omon qoladi
+const FIRST_NIGHT_STREAK = 2;
 const label = (r) => `${ROLES[r].emoji} ${ROLES[r].name}`;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 export class GameError extends Error {}
 
 export class Game {
-  constructor(chatId, { announce = () => {}, onChange = () => {}, onEnd = () => {} } = {}) {
+  constructor(chatId, { announce = () => {}, onChange = () => {}, onEnd = () => {}, onItemUsed = () => {}, onFirstNight = () => {} } = {}) {
     this.chatId = chatId;
     this.announce = announce;   // guruhga xabar: (text, withButton) => void
     this.onChange = onChange;   // holat o'zgarganda chaqiriladi
     this.onEnd = onEnd;         // o'yin g'olib bilan tugaganda (mukofot uchun)
+    this.onItemUsed = onItemUsed;     // do'kon buyumi ishlatilganda: (uid, item)
+    this.onFirstNight = onFirstNight; // 1-tun tugaganda: (game, deaths)
     this.players = new Map();   // id -> {id, name, photo, alive, role}
     this.hostId = null;
     this.phase = 'lobby';       // lobby | night | day | vote | kamikaze | end
@@ -114,6 +120,14 @@ export class Game {
     this.eventsId++;
   }
 
+  // Buyumdan bittasini ishlatamiz (bazadan ham ayiriladi)
+  useItem(p, item) {
+    if (!p.items?.[item]) return false;
+    p.items[item]--;
+    this.onItemUsed(p.id, item);
+    return true;
+  }
+
   note(uid, text) {
     if (!this.notes.has(uid)) this.notes.set(uid, []);
     this.notes.get(uid).push({ round: this.round, text });
@@ -132,7 +146,11 @@ export class Game {
     if (this.phase !== 'lobby') throw new GameError("O'yin allaqachon boshlangan");
     if (this.players.has(user.id)) return;
     if (this.players.size >= MAX_PLAYERS) throw new GameError(`Joy qolmadi (eng ko'pi ${MAX_PLAYERS})`);
-    this.players.set(user.id, { id: user.id, name: user.name, photo: user.photo || null, alive: true, role: null });
+    this.players.set(user.id, {
+      id: user.id, name: user.name, photo: user.photo || null, alive: true, role: null,
+      items: { shield: 0, fake_doc: 0, escape: 0 }, // do'kondan olingan buyumlar (server to'ldiradi)
+      streak: 0, // ketma-ket o'yinlarda 1-tunda o'ldirilganlar soni (server to'ldiradi)
+    });
     if (!this.hostId) this.hostId = user.id;
     this.addLog(`${user.name} qo'shildi`);
     this.onChange();
@@ -304,9 +322,18 @@ export class Game {
         rest = rest.filter((a) => a.kind === 'komissar');
         deaths.set(guard.id, 'guard');
       }
+      if (rest.length && this.round === 1 && t.streak >= FIRST_NIGHT_STREAK) {
+        rest = [];
+        t.streak = 0;
+        this.note(t.id, `🍀 Siz ${FIRST_NIGHT_STREAK + 1} o'yin ketma-ket birinchi tunda otildingiz. Bu safar shahar sizni asrab qoldi!`);
+      }
       if (rest.length && t.role === 'omadli' && Math.random() < LUCKY_CHANCE) {
         rest = [];
         this.note(t.id, '🤞 Bu tun sizga suiqasd qilishdi, lekin omadingiz keldi!');
+      }
+      if (rest.length && this.useItem(t, 'shield')) {
+        rest = [];
+        this.note(t.id, `🛡 Bu tun sizga suiqasd qilishdi, lekin Himoya sizni qutqardi! (qoldi: ${t.items.shield})`);
       }
       if (rest.length) { if (!deaths.has(tid)) deaths.set(tid, 'killed'); }
       else survivedAttack = true;
@@ -316,7 +343,12 @@ export class Game {
     if (komAction) {
       const t = P(komAction.targets[0]);
       if (komAction.mode === 'check') {
-        const shown = disguised === t.id && SHOOTERS.has(t.role) ? 'civil' : t.role;
+        let shown = disguised === t.id && SHOOTERS.has(t.role) ? 'civil' : t.role;
+        // Soxta hujjat: rol tinch aholi tomonida bo'lmasa ishlatiladi (Suidsidga kerak emas, u shubhali ko'rinishni xohlaydi)
+        if (!['civil', 'suidsid'].includes(ROLES[shown].side) && this.useItem(t, 'fake_doc')) {
+          shown = pick(FAKE_ROLES);
+          this.note(t.id, `📄 Komissar sizni tekshirdi, lekin Soxta hujjat sizni ${label(shown)} qilib ko'rsatdi.`);
+        }
         this.checks.push({ round: this.round, target: t.id, role: shown, revealed: false });
         for (const s of this.aliveWith('serjant')) this.note(s.id, `🕵️ Komissar ${t.name}ni tekshirdi: ${label(shown)}`);
       } else {
@@ -354,6 +386,7 @@ export class Game {
     this.announce(`☀️ Tong otdi.\n${lines.join('\n')}`);
 
     this.dayBlocked = blocked && P(blocked).alive ? blocked : null;
+    if (this.round === 1) this.onFirstNight(this, deaths);
     this.promote();
     if (this.checkWin()) return;
     this.startDay();
@@ -443,6 +476,10 @@ export class Game {
 
     if (!lynched) {
       const msg = '⚖️ Hech kim ovoz bermadi — hech kim osilmadi.';
+      this.addLog(msg);
+      this.announce(msg);
+    } else if (lynched.role !== 'suidsid' && this.useItem(lynched, 'escape')) {
+      const msg = `⚖️ Shahar ${lynched.name}ni osishga qaror qildi... lekin u 🎟 Osilishdan qutulishni ishlatdi va omon qoldi!`;
       this.addLog(msg);
       this.announce(msg);
     } else if (lynched.role === 'kamikadze') {

@@ -96,6 +96,18 @@ function createGame(chatId) {
     },
     onChange: () => broadcast(game),
     onEnd: (g) => rewardWinners(g),
+    onItemUsed: (uid, item) => {
+      db.useItem(uid, item)
+        .then((profile) => profile && pushProfile(game, uid, profile))
+        .catch((e) => console.error('useItem:', e.message));
+    },
+    onFirstNight: (g, deaths) => {
+      if (!db.COINS_ENABLED) return;
+      const players = [...g.players.values()];
+      if (players.some((p) => p.bot)) return; // test o'yinlari hisobga olinmaydi
+      db.setStreaks(players.map((p) => ({ id: p.id, name: p.name, killed: deaths.has(p.id) })))
+        .catch((e) => console.error('setStreaks:', e.message));
+    },
   });
   games.set(String(chatId), game);
   return game;
@@ -153,9 +165,10 @@ if (BOT_TOKEN) {
 
   bot.command(['balans', 'balance'], async (ctx) => {
     if (!db.COINS_ENABLED) return ctx.reply('YM coin hali yoqilmagan.');
-    const coins = await db.getCoins(ctx.from.id).catch(() => null);
-    if (coins == null) return ctx.reply("Balansni o'qib bo'lmadi, keyinroq urinib ko'ring.");
-    return ctx.reply(`🪙 ${ctx.from.first_name}, balansingiz: ${coins} YM coin`);
+    const pr = await db.getProfile(ctx.from.id).catch(() => null);
+    if (!pr) return ctx.reply("Balansni o'qib bo'lmadi, keyinroq urinib ko'ring.");
+    const items = Object.entries(db.SHOP).map(([k, it]) => `${it.name}: ${pr.items[k]} ta`).join('\n');
+    return ctx.reply(`🪙 ${ctx.from.first_name}, balansingiz: ${pr.coins} YM coin\n\n${items}\n\nDo'kon ilova ichida: 🛒 tugmasi.`);
   });
 
   bot.command('groupid', (ctx) => ctx.reply(`Guruh ID: ${ctx.chat.id}`));
@@ -203,10 +216,45 @@ async function rewardWinners(game) {
     const balances = await db.award(winners);
     game.announce(`🪙 G'oliblar ${db.COIN_REWARD} YM coin oldi:\n${winners.map((w) => `${w.name} — jami ${balances.get(w.id)} YM`).join('\n')}`);
     for (const ws of game.clients) {
-      if (balances.has(ws.user.id)) send(ws, { type: 'coins', coins: balances.get(ws.user.id), gained: db.COIN_REWARD });
+      if (balances.has(ws.user.id)) {
+        db.getProfile(ws.user.id).then((pr) => send(ws, { type: 'profile', ...pr, shop: db.SHOP, gained: db.COIN_REWARD })).catch(() => {});
+      }
     }
   } catch (e) {
     console.error('Coin berishda xato:', e.message);
+  }
+}
+
+// Profilni (coin, buyumlar) shu foydalanuvchining barcha oynalariga yuboramiz
+function pushProfile(game, uid, profile) {
+  for (const ws of game.clients) if (ws.user.id === uid) send(ws, { type: 'profile', ...profile, shop: db.SHOP });
+}
+
+// O'yinga qo'shilganda buyumlar va 1-tun hisoblagichini bazadan olamiz
+function loadProfile(game, uid) {
+  if (!db.COINS_ENABLED) return;
+  db.getProfile(uid).then((pr) => {
+    const p = game.players.get(uid);
+    if (p && game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; }
+  }).catch((e) => console.error('getProfile:', e.message));
+}
+
+// Do'kon: faqat o'yin davom etmayotganda (lobbida, o'yin tugagach yoki tomosha qilayotganda)
+async function buyItem(ws, item) {
+  const { game, user } = ws;
+  const p = game.players.get(user.id);
+  if (p?.alive && !['lobby', 'end'].includes(game.phase)) {
+    return send(ws, { type: 'error', message: "O'yin davomida sotib olib bo'lmaydi. O'yin tugagach yoki lobbida oling." });
+  }
+  try {
+    const pr = await db.buy(user.id, item);
+    if (p && game.phase === 'lobby') p.items = { ...pr.items };
+    pushProfile(game, user.id, pr);
+    send(ws, { type: 'bought', item: db.SHOP[item].name });
+  } catch (e) {
+    if (e instanceof db.ShopError) return send(ws, { type: 'error', message: e.message });
+    console.error('buy:', e.message);
+    send(ws, { type: 'error', message: "Sotib olib bo'lmadi, keyinroq urinib ko'ring" });
   }
 }
 
@@ -285,7 +333,7 @@ function handle(ws, msg) {
     ws.game = game;
     game.clients.add(ws);
     if (db.COINS_ENABLED) {
-      db.getCoins(user.id).then((coins) => send(ws, { type: 'coins', coins })).catch(() => {});
+      db.getProfile(user.id).then((pr) => send(ws, { type: 'profile', ...pr, shop: db.SHOP })).catch(() => {});
     }
     return broadcast(game); // tomoshabinlar soni yangilansin
   }
@@ -293,7 +341,8 @@ function handle(ws, msg) {
   const { game, user } = ws;
   if (!game) throw new GameError("Avval avtorizatsiyadan o'ting");
   switch (msg.type) {
-    case 'join': return game.join(user);
+    case 'join': game.join(user); return loadProfile(game, user.id);
+    case 'buy': return void buyItem(ws, String(msg.item || '')).catch(() => {});
     case 'leave': return game.leave(user.id);
     case 'addBot': return game.addBot(user.id);
     case 'start': return game.start(user.id);

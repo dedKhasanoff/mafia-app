@@ -61,6 +61,19 @@ Ular tunda va ovoz berishda o'zi tasodifiy tanlaydi. Kam odam bilan sinash uchun
 O'yin g'olib bilan tugaganda har bir g'olib 20 YM coin oladi (`COIN_REWARD`). Balans ilovaning tepasida
 va botda `/balans` buyrug'i bilan ko'rinadi. Test botlari qatnashgan o'yinda coin berilmaydi.
 
+**🛒 Do'kon** (ilovada balans ustiga bosing). Buyumlar kerak bo'lganda o'zi ishlatiladi, har biri bir marta:
+
+| Buyum | Narx | Nima qiladi |
+|---|---|---|
+| 🛡 Himoya | 100 YM | Tunda suiqasd qilinsa, omon qolasiz |
+| 📄 Soxta hujjat | 150 YM | Komissar tekshirsa, tinch aholi tomonidagi tasodifiy rol ko'rinadi (faqat rolingiz tinch aholi tomonida bo'lmasa ishlatiladi) |
+| 🎟 Osilishdan qutulish | 150 YM | Kunduzi osishga qaror qilinsa, omon qolasiz (Suidsidda ishlatilmaydi) |
+
+O'yin davomida sotib olib bo'lmaydi: lobbida, o'yin tugagach yoki tomosha qilayotganda olinadi.
+
+**🍀 Birinchi tun qoidasi:** o'yinchi ketma-ket 2 o'yinda birinchi tunda o'ldirilgan bo'lsa, uchinchi o'yinning
+birinchi tunida otilsa ham omon qoladi. Test botlari bor o'yinlar hisobga olinmaydi.
+
 Coin'lar saqlanishi uchun bepul Postgres kerak, masalan **Neon**:
 1. neon.tech → **Sign up** → yangi loyiha yarating.
 2. **Connection string** ni nusxalang (`postgresql://...` bilan boshlanadi).

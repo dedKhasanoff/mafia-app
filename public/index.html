@@ -632,6 +632,7 @@ function render() {
   if (s.phase === 'lobby') {
     if (!me.joined) button("✅ Qo'shilish", () => sendMsg({ type: 'join' }), false, s.players.length >= s.maxPlayers);
     if (me.id === s.hostId) button("▶️ O'yinni boshlash", () => sendMsg({ type: 'start' }), false, s.players.length < s.minPlayers);
+    if (me.id === s.hostId && s.testBots) button("🤖 Test bot qo'shish", () => sendMsg({ type: 'addBot' }), true, s.players.length >= s.maxPlayers);
     if (me.joined) button('Chiqish', () => sendMsg({ type: 'leave' }), true);
   }
   if (s.phase === 'vote' && me.canAct) {

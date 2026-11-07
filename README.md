@@ -5,6 +5,8 @@ Node.js server (Express + WebSocket + grammY) va Telegram ichida ochiladigan o'y
 ```
 server.js         bot, WebSocket, Telegram avtorizatsiyasi
 game.js           o'yin qoidalari (rollar, tun, kun, ovoz)
+subs.js           guruh obunasi (Telegram Stars)
+public/roles/     rol rasmlari (<rol>.jpg)
 public/index.html Mini App oynasi
 ```
 
@@ -35,9 +37,31 @@ public/index.html Mini App oynasi
 1. Botni guruhga qo'shing va `/newgame` yozing.
 2. «🎭 O'yinni ochish» tugmasini bosing → ilovada **Qo'shilish**.
 3. Birinchi qo'shilgan odam (👑) **O'yinni boshlash**ni bosadi (kamida 4 kishi).
-4. Rol kartangizni bosib, rolingizni yashirincha ko'ring.
+4. O'yin boshlanganda rolingiz katta karta bo'lib chiqadi, keyin tepada doim ko'rinib turadi.
 
-Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin).
+Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/obuna` (obuna holati yoki to'lov),
+`/groupid` (guruh ID'si), `/paysupport` (to'lov bo'yicha yordam).
+
+**Vaqt:** har bir bosqich o'z vaqti tugaguncha davom etadi, hamma harakat qilib yoki ovoz berib bo'lsa ham:
+tun 1 daqiqa, muhokama 30 soniya, ovoz berish 30 soniya.
+
+**🎙 Mikrofon:** kunduzi (muhokama va ovoz berishda) tirik o'yinchilar pastdagi tugmani bosib turib
+gapiradi (eng ko'pi 20 soniya). Qo'yib yuborilganda ovoz o'yindagi hammaga eshittiriladi. Tunda, o'lganlar
+va tomoshabinlar gapira olmaydi, lekin eshitadi. Ovozlar serverda saqlanmaydi.
+
+**🤖 Test botlari:** `TEST_BOTS=1` yoqilsa, o'yin egasi lobbida sun'iy o'yinchilar qo'sha oladi.
+Ular tunda va ovoz berishda o'zi tasodifiy tanlaydi. Kam odam bilan sinash uchun.
+
+## ⭐ Guruh obunasi
+
+`/newgame` faqat obunasi faol guruhda ishlaydi. Obuna bo'lmasa, bot «⭐ Obuna bo'lish» tugmasini yuboradi:
+guruhdagi istalgan odam Telegram Stars bilan to'laydi (standart: oyiga 500 Stars), shundan keyin guruhdagi
+hamma bepul o'ynaydi. Obuna har oy avtomatik yangilanadi va Telegram sozlamalarida bekor qilinadi.
+
+Ma'lumotlar bazasi kerak emas: server qayta ishga tushganda to'lovlar Telegram'dan qayta o'qiladi.
+Tushgan Stars'ni @BotFather → botingiz → **Balance** bo'limida ko'rasiz.
+
+O'z guruhingizni bepul qilish: guruhda `/groupid` yozing va chiqqan raqamni `FREE_GROUPS` ga qo'shing.
 
 ## Rollar
 
@@ -64,10 +88,15 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | O'zgaruvchi | Standart | Nima qiladi |
 |---|---|---|
 | `NIGHT_SEC` | 60 | Tun davomiyligi |
-| `DAY_SEC` | 60 | Muhokama |
-| `VOTE_SEC` | 40 | Ovoz berish |
+| `DAY_SEC` | 30 | Muhokama |
+| `VOTE_SEC` | 30 | Ovoz berish |
 | `KAMIKAZE_SEC` | 20 | Kamikadze tanlash vaqti |
 | `MIN_PLAYERS` | 4 | Eng kam o'yinchi |
+| `SUB_PRICE` | 500 | Obuna narxi (Stars, oyiga) |
+| `FREE_GROUPS` | — | Bepul guruhlar ID'si, vergul bilan: `-100123,-100456` |
+| `SUBSCRIPTION` | — | `0` bo'lsa obuna o'chadi, hamma bepul o'ynaydi |
+| `SUPPORT_TEXT` | — | `/paysupport` javobi (masalan, `Savollar: @username`) |
+| `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)
 
@@ -82,4 +111,4 @@ Brauzerda bir nechta oyna oching:
 
 ## Eslatma
 
-O'yinlar server xotirasida saqlanadi: Railway qayta ishga tushsa, ketayotgan o'yin yo'qoladi va `/newgame` qaytadan yoziladi.
+O'yinlar server xotirasida saqlanadi: server qayta ishga tushsa, ketayotgan o'yin yo'qoladi va `/newgame` qaytadan yoziladi.

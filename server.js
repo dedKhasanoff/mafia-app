@@ -263,6 +263,7 @@ function handle(ws, msg) {
   switch (msg.type) {
     case 'join': return game.join(user);
     case 'leave': return game.leave(user.id);
+    case 'addBot': return game.addBot(user.id);
     case 'start': return game.start(user.id);
     case 'voice': return relayVoice(ws, msg);
     case 'act': {

@@ -4,8 +4,8 @@ export const MIN_PLAYERS = Number(process.env.MIN_PLAYERS || 4);
 export const MAX_PLAYERS = 20;
 const DUR = {
   night: Number(process.env.NIGHT_SEC || 60),
-  day: Number(process.env.DAY_SEC || 60),
-  vote: Number(process.env.VOTE_SEC || 40),
+  day: Number(process.env.DAY_SEC || 30),
+  vote: Number(process.env.VOTE_SEC || 30),
   kamikaze: Number(process.env.KAMIKAZE_SEC || 20),
 };
 const LUCKY_CHANCE = 0.7;
@@ -195,10 +195,8 @@ export class Game {
     }
     if (p.role === 'komissar') mode = mode === 'shoot' ? 'shoot' : 'check';
     else mode = null;
+    // Tun hamma harakat qilsa ham vaqt tugaguncha davom etadi
     this.actions.set(id, { targets, mode });
-
-    const expected = this.alive.filter((x) => NIGHT_ROLES.has(x.role));
-    if (expected.every((x) => this.actions.has(x.id))) return this.resolveNight();
     this.onChange();
   }
 
@@ -346,14 +344,6 @@ export class Game {
     this.onChange();
   }
 
-  skipDay(id) {
-    if (this.phase !== 'day') return;
-    if (id !== this.hostId) throw new GameError("Faqat o'yin egasi muhokamani tugata oladi");
-    this.startVote();
-  }
-
-  get voters() { return this.alive.filter((p) => p.id !== this.dayBlocked); }
-
   startVote() {
     if (this.phase !== 'day') return;
     this.beginPhase('vote');
@@ -374,8 +364,8 @@ export class Game {
       if (!t || !t.alive) throw new GameError("Bu o'yinchi tirik emas");
       if (t.id === id) throw new GameError("O'zingizga ovoz bera olmaysiz");
     }
+    // Ovoz berish ham hamma ovoz bersa ham vaqt tugaguncha davom etadi
     this.votes.set(id, target);
-    if (this.votes.size === this.voters.length) return this.resolveVote();
     this.onChange();
   }
 
@@ -506,6 +496,12 @@ export class Game {
     this.onChange();
   }
 
+  // Kunduzi (muhokama va ovoz berishda) faqat tirik o'yinchilar mikrofonda gapira oladi
+  canSpeak(uid) {
+    const p = this.players.get(uid);
+    return !!p?.alive && (this.phase === 'day' || this.phase === 'vote');
+  }
+
   isHero(p) { return p.role === 'kamikadze' && !p.alive; }
 
   stop() {
@@ -593,6 +589,7 @@ export class Game {
         blocked: uid === this.dayBlocked && (this.phase === 'day' || this.phase === 'vote'),
         choice,
         canAct,
+        canSpeak: this.canSpeak(uid),
       },
       players: [...this.players.values()].map((p) => ({
         id: p.id,

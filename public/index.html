@@ -146,6 +146,8 @@
     color: #fff; padding: 10px 16px; border-radius: 12px; font-weight: 600; transition: transform .25s; z-index: 20; max-width: 90%;
   }
   #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.ok { background: var(--ok); color: #0b1a12; }
+  .coins { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--gold) 22%, var(--card)); border: 1px solid var(--gold); font-size: 12px; font-weight: 700; }
 
   /* ---------- Fon: osmon ---------- */
   #app { position: relative; z-index: 1; }
@@ -279,6 +281,7 @@ tg?.expand();
 
 const $ = (id) => document.getElementById(id);
 let state = null, endAt = null, ws = null, retry = 0, fatal = false;
+let myCoins = null;      // YM coin balansi (baza ulangan bo'lsa)
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
@@ -416,6 +419,10 @@ function connect() {
       else render();
       // Rol berilganda yoki o'zgarganda (masalan, Serjant → Komissar) katta karta chiqadi
       if (prev && m.me.role && m.me.role !== prev.me.role) showReveal(m.me.role);
+    } else if (m.type === 'coins') {
+      myCoins = m.coins;
+      if (m.gained) toast(`🪙 +${m.gained} YM coin! Balans: ${m.coins}`, true);
+      if (state) render();
     } else if (m.type === 'voice') {
       playVoice(m);
     } else if (m.type === 'error') {
@@ -434,9 +441,10 @@ const sendMsg = (m) => ws?.readyState === 1 && ws.send(JSON.stringify(m));
 
 function showOverlay(text) { $('overlayText').textContent = text; $('overlay').hidden = false; }
 let toastTimer;
-function toast(text) {
+function toast(text, ok) {
   const t = $('toast'); t.textContent = text; t.classList.add('show');
-  tg?.HapticFeedback?.notificationOccurred('error');
+  t.classList.toggle('ok', !!ok);
+  tg?.HapticFeedback?.notificationOccurred(ok ? 'success' : 'error');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
@@ -463,7 +471,7 @@ const nameOf = (id) => state.players.find((p) => p.id === id)?.name ?? '?';
 
 function canTarget(p) {
   const s = state, me = s.me, role = me.role;
-  if (!me.canAct || !p.alive) return false;
+  if (!me.canAct || !p.alive || me.choice) return false; // tanlov bir marta qilinadi
   if (s.phase === 'vote' || s.phase === 'kamikaze') return p.id !== me.id;
   if (s.phase === 'night') {
     if (role === 'doktor') return true;
@@ -519,11 +527,11 @@ function hintText() {
     const base = NIGHT_HINT[me.role];
     if (!base) return "Shahar uxlayapti… 😴 Tong otishini kuting.";
     if (me.role === 'jurnalist') return `${base} (${(me.choice?.targets || pending).length}/2)`;
-    return me.choice ? `${base} Tanlovni o'zgartirish mumkin.` : base;
+    return me.choice ? "✅ Tanlov qilindi. Tong otishini kuting." : `${base} Diqqat: tanlovni o'zgartirib bo'lmaydi.`;
   }
   if (me.blocked) return "💃🏼 Ma'shuqa sizni band qildi — bugun ovoz bera olmaysiz.";
   if (s.phase === 'day') return '🗣 Muhokama: kim jinoyatchi? 🎙 tugmasini bosib turib gapiring.';
-  if (s.phase === 'vote') return me.choice ? "Ovozingiz qabul qilindi. Boshqasini bosib o'zgartirish mumkin." : "Kimni osamiz? O'yinchini bosing.";
+  if (s.phase === 'vote') return me.choice ? '✅ Ovozingiz qabul qilindi.' : "Kimni osamiz? O'yinchini bosing. Ovozni o'zgartirib bo'lmaydi.";
   return '';
 }
 
@@ -539,6 +547,7 @@ function render() {
   const alive = s.players.filter((p) => p.alive).length;
   $('sub').textContent = s.phase === 'lobby' ? `${s.players.length} / ${s.maxPlayers} o'yinchi` : `Tirik: ${alive} / ${s.players.length}`;
   if (s.spectators) $('sub').append(el('span', 'spect', `👀 ${s.spectators}`));
+  if (myCoins != null) $('sub').append(el('span', 'coins', `🪙 ${myCoins} YM`));
 
   // G'olib
   const w = $('winner'); w.replaceChildren();
@@ -569,13 +578,12 @@ function render() {
 
   // Komissar rejimi
   const modes = $('modes'); modes.replaceChildren();
-  if (s.phase === 'night' && me.role === 'komissar' && me.canAct) {
+  if (s.phase === 'night' && me.role === 'komissar' && me.canAct && !me.choice) {
     for (const [mode, text] of [['check', '🔍 Tekshirish'], ['shoot', '🔫 Otish']]) {
       const b = el('button', 'btn' + (komMode === mode ? '' : ' ghost'), text);
       b.onclick = () => {
         komMode = mode;
         tg?.HapticFeedback?.impactOccurred('light');
-        if (me.choice?.targets?.[0] != null) sendMsg({ type: 'act', targets: me.choice.targets, mode });
         render();
       };
       modes.append(b);
@@ -634,12 +642,6 @@ function render() {
     if (me.id === s.hostId) button("▶️ O'yinni boshlash", () => sendMsg({ type: 'start' }), false, s.players.length < s.minPlayers);
     if (me.id === s.hostId && s.testBots) button("🤖 Test bot qo'shish", () => sendMsg({ type: 'addBot' }), true, s.players.length >= s.maxPlayers);
     if (me.joined) button('Chiqish', () => sendMsg({ type: 'leave' }), true);
-  }
-  if (s.phase === 'vote' && me.canAct) {
-    button(`🤷 Hech kim${s.skipVotes ? ` (${s.skipVotes})` : ''}`, () => sendMsg({ type: 'vote', target: 'skip' }), !me.choice?.skip);
-  }
-  if (s.phase === 'vote' && s.skipVoters.length) {
-    act.append(el('div', 'skipline', `🤷 Hech kimga: ${s.skipVoters.map(nameOf).join(', ')}`));
   }
   if (s.phase === 'end') button('Yopish', () => tg?.close(), true);
 

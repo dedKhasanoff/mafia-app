@@ -6,6 +6,7 @@ Node.js server (Express + WebSocket + grammY) va Telegram ichida ochiladigan o'y
 server.js         bot, WebSocket, Telegram avtorizatsiyasi
 game.js           o'yin qoidalari (rollar, tun, kun, ovoz)
 subs.js           guruh obunasi (Telegram Stars)
+db.js             YM coin balansi (Postgres)
 public/roles/     rol rasmlari (<rol>.jpg)
 public/index.html Mini App oynasi
 ```
@@ -39,11 +40,14 @@ public/index.html Mini App oynasi
 3. Birinchi qo'shilgan odam (👑) **O'yinni boshlash**ni bosadi (kamida 4 kishi).
 4. O'yin boshlanganda rolingiz katta karta bo'lib chiqadi, keyin tepada doim ko'rinib turadi.
 
-Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/obuna` (obuna holati yoki to'lov),
+Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/balans` (YM coin), `/obuna` (obuna holati yoki to'lov),
 `/groupid` (guruh ID'si), `/paysupport` (to'lov bo'yicha yordam).
 
 **Vaqt:** har bir bosqich o'z vaqti tugaguncha davom etadi, hamma harakat qilib yoki ovoz berib bo'lsa ham:
 tun 1 daqiqa, muhokama 30 soniya, ovoz berish 30 soniya.
+
+**Tanlov:** tunda rol harakati ham, kunduzgi ovoz ham bir marta qilinadi va o'zgartirib bo'lmaydi.
+Kunduzi eng ko'p ovoz olgan odam osiladi. Ovozlar teng bo'lsa, ular orasidan qur'a tashlanadi.
 
 **🎙 Mikrofon:** kunduzi (muhokama va ovoz berishda) tirik o'yinchilar pastdagi tugmani bosib turib
 gapiradi (eng ko'pi 20 soniya). Qo'yib yuborilganda ovoz o'yindagi hammaga eshittiriladi. Tunda, o'lganlar
@@ -51,6 +55,18 @@ va tomoshabinlar gapira olmaydi, lekin eshitadi. Ovozlar serverda saqlanmaydi.
 
 **🤖 Test botlari:** `TEST_BOTS=1` yoqilsa, o'yin egasi lobbida sun'iy o'yinchilar qo'sha oladi.
 Ular tunda va ovoz berishda o'zi tasodifiy tanlaydi. Kam odam bilan sinash uchun.
+
+## 🪙 YM coin
+
+O'yin g'olib bilan tugaganda har bir g'olib 20 YM coin oladi (`COIN_REWARD`). Balans ilovaning tepasida
+va botda `/balans` buyrug'i bilan ko'rinadi. Test botlari qatnashgan o'yinda coin berilmaydi.
+
+Coin'lar saqlanishi uchun bepul Postgres kerak, masalan **Neon**:
+1. neon.tech → **Sign up** → yangi loyiha yarating.
+2. **Connection string** ni nusxalang (`postgresql://...` bilan boshlanadi).
+3. Render → **Environment** → `DATABASE_URL` = shu satr → **Save Changes**.
+
+`DATABASE_URL` bo'lmasa, o'yin coin'siz ishlayveradi.
 
 ## ⭐ Guruh obunasi
 
@@ -96,6 +112,8 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `FREE_GROUPS` | — | Bepul guruhlar ID'si, vergul bilan: `-100123,-100456` |
 | `SUBSCRIPTION` | — | `0` bo'lsa obuna o'chadi, hamma bepul o'ynaydi |
 | `SUPPORT_TEXT` | — | `/paysupport` javobi (masalan, `Savollar: @username`) |
+| `DATABASE_URL` | — | Postgres manzili (YM coin uchun), masalan Neon'dan |
+| `COIN_REWARD` | 20 | Har bir g'olibga beriladigan YM coin |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)

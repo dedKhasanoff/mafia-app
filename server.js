@@ -258,6 +258,28 @@ async function buyItem(ws, item) {
   }
 }
 
+// Telegram'da "/" yozilganda chiqadigan buyruqlar ro'yxati
+async function setCommandMenu() {
+  const group = [
+    { command: 'newgame', description: "Yangi o'yin ochish" },
+    { command: 'stopgame', description: "O'yinni to'xtatish (o'yin egasi yoki admin)" },
+    { command: 'balans', description: 'YM coin balansi va buyumlar' },
+    { command: 'obuna', description: 'Guruh obunasi holati' },
+    { command: 'paysupport', description: "To'lov bo'yicha yordam" },
+  ];
+  const priv = [
+    { command: 'start', description: 'Bot haqida' },
+    { command: 'balans', description: 'YM coin balansi va buyumlar' },
+    { command: 'paysupport', description: "To'lov bo'yicha yordam" },
+  ];
+  // Adminlar uchun ro'yxat guruhdagi ro'yxat o'rniga chiqadi, shuning uchun hammasini o'z ichiga oladi
+  const admins = [...group, { command: 'groupid', description: 'Guruh ID raqami (sozlash uchun)' }];
+  await bot.api.setMyCommands(group, { scope: { type: 'all_group_chats' } });
+  await bot.api.setMyCommands(admins, { scope: { type: 'all_chat_administrators' } });
+  await bot.api.setMyCommands(priv, { scope: { type: 'all_private_chats' } });
+  console.log("Buyruqlar ro'yxati o'rnatildi");
+}
+
 function closeGame(game) {
   clearTimeout(game.timer);
   if (games.get(String(game.chatId)) === game) games.delete(String(game.chatId));
@@ -396,6 +418,7 @@ server.listen(PORT, async () => {
   if (bot) {
     const me = await bot.api.getMe();
     botUsername = me.username;
+    setCommandMenu().catch((e) => console.error('setMyCommands:', e.description || e.message));
     if (subs.SUBS_ENABLED) {
       subs.loadFromTelegram(bot.api)
         .then((n) => console.log(`Obunalar tiklandi: ${n} ta to'lov`))

@@ -42,6 +42,7 @@ public/index.html Mini App oynasi
 
 Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/balans` (YM coin), `/obuna` (obuna holati yoki to'lov),
 `/groupid` (guruh ID'si), `/paysupport` (to'lov bo'yicha yordam).
+Bot ishga tushganda bu buyruqlarni Telegram'ga o'zi ro'yxatdan o'tkazadi, shuning uchun `/` yozilganda ro'yxat chiqadi.
 
 **Vaqt:** har bir bosqich o'z vaqti tugaguncha davom etadi, hamma harakat qilib yoki ovoz berib bo'lsa ham:
 tun 1 daqiqa, muhokama 30 soniya, ovoz berish 30 soniya.

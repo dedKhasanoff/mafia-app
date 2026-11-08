@@ -65,6 +65,8 @@ const KOM_TEAM = new Set(['komissar', 'serjant']);
 const FAKE_ROLES = ['civil', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'omadli', 'jurnalist', 'mer', 'serjant'];
 // Ketma-ket shuncha o'yinda 1-tunda o'ldirilgan o'yinchi navbatdagi 1-tunda omon qoladi
 const FIRST_NIGHT_STREAK = 2;
+// Tungi roli bor o'yinchi shuncha tun ketma-ket harakat qilmasa, o'yindan chiqariladi
+const IDLE_NIGHTS = Number(process.env.IDLE_NIGHTS || 2);
 // Kim o'ldirgani (hujum turi bo'yicha)
 const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar' };
 const killers = (kinds) => [...new Set(kinds)].map((k) => KILLER[k]).join(' va ');
@@ -410,6 +412,18 @@ export class Game {
       if (why === 'guard') lines.push(`🛡 ${p.name} kimnidir himoya qilib, ${by} o'qini o'ziga oldi va halok bo'ldi. U ${label(p.role)} edi.`);
       else lines.push(`💀 ${p.name}ni ${by} o'ldirdi. U ${label(p.role)} edi.`);
       this.note(uid, why === 'guard' ? `💀 Siz himoya qilgan odamni qutqarib, ${by} qo'lida halok bo'ldingiz.` : `💀 Sizni ${by} o'ldirdi.`);
+    }
+    // Faol bo'lmaganlar: tungi roli bor, lekin harakat qilmagan tirik o'yinchilar
+    for (const p of this.alive.filter((x) => NIGHT_ROLES.has(x.role))) {
+      if (this.actions.has(p.id)) { p.idle = 0; continue; }
+      p.idle = (p.idle || 0) + 1;
+      if (p.idle >= IDLE_NIGHTS) {
+        p.alive = false;
+        lines.push(`🚪 ${p.name} ${IDLE_NIGHTS} tun ketma-ket harakat qilmagani uchun o'yindan chiqarildi. U ${label(p.role)} edi.`);
+        this.note(p.id, `🚪 Siz ${IDLE_NIGHTS} tun ketma-ket harakat qilmadingiz va o'yindan chiqarildingiz.`);
+      } else {
+        this.note(p.id, `⚠️ Bu tun harakat qilmadingiz. Yana ${IDLE_NIGHTS - p.idle} tun harakat qilmasangiz, o'yindan chiqarilasiz.`);
+      }
     }
     if (!lines.length) lines.push(survivedAttack ? "Bu tun suiqasd bo'ldi, lekin hamma omon qoldi!" : "Tun tinch o'tdi.");
     for (const l of lines) this.addLog(l);

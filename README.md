@@ -44,8 +44,8 @@ Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/balans` (YM coin)
 `/groupid` (guruh ID'si), `/paysupport` (to'lov bo'yicha yordam).
 Bot ishga tushganda bu buyruqlarni Telegram'ga o'zi ro'yxatdan o'tkazadi, shuning uchun `/` yozilganda ro'yxat chiqadi.
 
-**Vaqt:** har bir bosqich o'z vaqti tugaguncha davom etadi, hamma harakat qilib yoki ovoz berib bo'lsa ham:
-tun 1 daqiqa, muhokama 30 soniya, ovoz berish 30 soniya.
+**Vaqt:** tun 1 daqiqa, lekin hamma tungi rollar harakat qilib bo'lsa, darhol tugaydi.
+Muhokama 30 soniya va ovoz berish 30 soniya: bular hamma ovoz berib bo'lsa ham vaqt tugaguncha davom etadi.
 
 **Tanlov:** tunda rol harakati ham, kunduzgi ovoz ham bir marta qilinadi va o'zgartirib bo'lmaydi.
 Kunduzi eng ko'p ovoz olgan odam osiladi. Ovozlar teng bo'lsa, ular orasidan qur'a tashlanadi.

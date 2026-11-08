@@ -263,8 +263,9 @@ export class Game {
     }
     if (p.role === 'komissar') mode = mode === 'shoot' ? 'shoot' : 'check';
     else mode = null;
-    // Tun hamma harakat qilsa ham vaqt tugaguncha davom etadi
     this.actions.set(id, { targets, mode });
+    // Hamma tungi rollar harakat qilib bo'lsa, tun vaqtni kutmasdan tugaydi
+    if (this.alive.filter((x) => NIGHT_ROLES.has(x.role)).every((x) => this.actions.has(x.id))) return this.resolveNight();
     this.onChange();
   }
 

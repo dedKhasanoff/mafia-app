@@ -50,6 +50,7 @@ Muhokama 30 soniya va ovoz berish 30 soniya: bular hamma ovoz berib bo'lsa ham v
 **Tanlov:** tunda rol harakati ham, kunduzgi ovoz ham bir marta qilinadi va o'zgartirib bo'lmaydi.
 Kunduzi eng ko'p ovoz olgan odam dor oldiga chiqadi (teng bo'lsa, qur'a tashlanadi). Keyin 30 soniya
 «Osilsinmi? Ha / Yo'q» ovozi bo'ladi: «Ha» ko'p bo'lsa osiladi, teng yoki «Yo'q» ko'p bo'lsa avf etiladi.
+Bu ovoz yashirin: kim «Ha», kim «Yo'q» degani ko'rinmaydi, faqat natija soni e'lon qilinadi.
 Dor oldidagi o'yinchi bu ovozda qatnashmaydi, lekin mikrofonda o'zini oqlashi mumkin. Hamma ovoz bersa, darhol tugaydi.
 
 Kamikadze kunduzi osilsa bitta odamni tanlab olib ketadi; tunda otilsa, uni otganlardan birini o'zi bilan olib ketadi.

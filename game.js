@@ -587,8 +587,8 @@ export class Game {
       const weight = this.players.get(uid).role === 'mer' ? 2 : 1;
       if (v) yes += weight; else no += weight;
     }
-    const names = (v) => [...this.confirmVotes].filter(([, x]) => x === v).map(([u]) => this.players.get(u).name).join(', ') || '—';
-    this.announce(`⚖️ ${lynched.name} osilsinmi?\n👍 Ha (${yes}): ${names(true)}\n👎 Yo'q (${no}): ${names(false)}`);
+    // Yashirin ovoz: kim nima degani aytilmaydi, faqat natija
+    this.announce(`⚖️ ${lynched.name} osilsinmi?\n👍 Ha: ${yes} · 👎 Yo'q: ${no}`);
     if (yes <= no) {
       const msg = `🕊 Shahar ${lynched.name}ni avf etdi — u osilmadi (Ha: ${yes}, Yo'q: ${no}).`;
       this.addLog(msg);
@@ -794,10 +794,8 @@ export class Game {
       winner: this.winner,
       kamikazeId: this.kamikazeId,
       accusedId: this.phase === 'confirm' ? this.accusedId : null,
-      confirm: this.phase === 'confirm' ? {
-        yes: [...this.confirmVotes].filter(([, v]) => v).map(([u]) => u),
-        no: [...this.confirmVotes].filter(([, v]) => !v).map(([u]) => u),
-      } : null,
+      // Yashirin ovoz: faqat nechta odam ovoz bergani, kim nima degani yuborilmaydi
+      confirm: this.phase === 'confirm' ? { voted: this.confirmVotes.size, total: this.confirmVoters.length } : null,
       roles: ROLES,
       me: {
         id: uid,

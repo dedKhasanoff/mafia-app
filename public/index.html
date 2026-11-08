@@ -579,7 +579,8 @@ function hintText() {
   if (s.phase === 'day') return '🗣 Muhokama: kim jinoyatchi? 🎙 tugmasini bosib turib gapiring.';
   if (s.phase === 'confirm') {
     if (s.accusedId === me.id) return "⚖️ Siz dor oldidasiz! 🎙 Mikrofonda o'zingizni oqlang.";
-    return me.choice ? '✅ Ovozingiz qabul qilindi.' : `⚖️ ${nameOf(s.accusedId)} osilsinmi? Pastdan tanlang. Ovozni o'zgartirib bo'lmaydi.`;
+    if (me.choice) return `✅ Ovozingiz qabul qilindi (${me.choice.yes ? '👍 Ha' : "👎 Yo'q"}). Uni faqat siz ko'rasiz.`;
+    return `⚖️ ${nameOf(s.accusedId)} osilsinmi? Pastdan tanlang. Ovoz yashirin, uni o'zgartirib bo'lmaydi.`;
   }
   if (s.phase === 'vote') return me.choice ? '✅ Ovozingiz qabul qilindi.' : "Kimni osamiz? O'yinchini bosing. Ovozni o'zgartirib bo'lmaydi.";
   return '';
@@ -720,10 +721,8 @@ function render() {
       box.append(yes, no);
       act.append(box);
     }
-    const t = el('div', 'confirm-tally');
-    const list = (ids) => (ids.length ? ids.map(nameOf).join(', ') : '—');
-    t.append(el('div', '', `👍 Ha (${s.confirm.yes.length}): ${list(s.confirm.yes)}`), el('div', '', `👎 Yo'q (${s.confirm.no.length}): ${list(s.confirm.no)}`));
-    act.append(t);
+    // Yashirin ovoz: kim nima degani ko'rinmaydi
+    act.append(el('div', 'confirm-tally', `🤫 Yashirin ovoz · ovoz berdi: ${s.confirm.voted} / ${s.confirm.total}`));
   }
   if (s.phase === 'end') button('Yopish', () => tg?.close(), true);
 

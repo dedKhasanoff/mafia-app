@@ -68,6 +68,9 @@ Ular tunda va ovoz berishda o'zi tasodifiy tanlaydi. Kam odam bilan sinash uchun
 O'yin g'olib bilan tugaganda har bir g'olib 20 YM coin oladi (`COIN_REWARD`). Balans ilovaning tepasida
 va botda `/balans` buyrug'i bilan ko'rinadi. Test botlari qatnashgan o'yinda coin berilmaydi.
 
+**🏆 Rollar bo'yicha g'alabalar:** har bir g'alaba qaysi rolda bo'lgani saqlanadi. O'yinchi kartasida eng ko'p
+yutgan roli ko'rinadi (masalan, "🏆 🤵🏻 Mafia 17×"), to'liq ro'yxat profilda va `/balans` da.
+
 **🛒 Do'kon** (ilovada balans ustiga bosing). Buyumlar kerak bo'lganda o'zi ishlatiladi, har biri bir marta:
 
 | Buyum | Narx | Nima qiladi |

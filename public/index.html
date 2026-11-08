@@ -112,6 +112,11 @@
   .btn.yes { background: var(--danger); color: #fff; }
   .btn.no { background: var(--ok); color: #0b1a12; }
   .confirm-tally { font-size: 13px; text-align: center; color: var(--muted); line-height: 1.5; }
+  .fame { font-size: 11px; color: var(--gold); margin-top: 3px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+  .stats span { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  .stats span.best { border-color: var(--gold); color: var(--gold); font-weight: 700; }
+  .sheet h3 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   .group-title {
     grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px;
     font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
@@ -316,7 +321,7 @@ tg?.expand();
 const $ = (id) => document.getElementById(id);
 let state = null, endAt = null, ws = null, retry = 0, fatal = false;
 let myCoins = null;      // YM coin balansi (baza ulangan bo'lsa)
-let myItems = {}, shopList = null;
+let myItems = {}, shopList = null, myStats = {};
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
@@ -462,6 +467,7 @@ function connect() {
     } else if (m.type === 'profile') {
       myCoins = m.coins;
       myItems = m.items || {};
+      myStats = m.stats || {};
       shopList = m.shop || shopList;
       if (m.gained) toast(`🪙 +${m.gained} YM coin! Balans: ${m.coins}`, true);
       if (state) render();
@@ -676,6 +682,8 @@ function render() {
     if (p.role && (p.id !== me.id || !p.alive || s.phase === 'end')) tag = label(p.role);
     if (!p.alive) tag = `💀 ${tag}`;
     c.append(el('div', 'tag', tag));
+    // Eng ko'p g'alaba qozongan roli, masalan "🏆 🤵🏻 Mafia 17×"
+    if (p.top && s.roles[p.top.role]) c.append(el('div', 'fame', `🏆 ${label(p.top.role)} ${p.top.wins}×`));
 
     if (p.id === s.hostId) c.append(el('div', 'badge left', '👑'));
     if (p.winner) c.append(el('div', 'badge', '🏆'));
@@ -908,9 +916,16 @@ $('shop').onclick = (e) => { if (e.target === $('shop')) $('shop').hidden = true
 function renderShop() {
   if ($('shop').hidden || !shopList) return;
   const sh = $('sheet'); sh.replaceChildren();
-  const h = el('h2', '', "🛒 Do'kon");
+  const h = el('h2', '', '👤 Profil');
   h.append(el('span', 'bal', `🪙 ${myCoins ?? 0} YM`));
-  sh.append(h, el('div', 'note', "Buyumlar kerak bo'lganda o'zi ishlatiladi. Har biri bir marta ishlaydi. O'yin davomida sotib olib bo'lmaydi."));
+  sh.append(h);
+  // G'alabalar: rollar bo'yicha, ko'pidan kamiga
+  sh.append(el('h3', '', "🏆 G'alabalarim"));
+  const st = el('div', 'stats');
+  const wins = Object.entries(myStats).filter(([r, w]) => w > 0 && state?.roles?.[r]).sort((a, b) => b[1] - a[1]);
+  if (!wins.length) st.append(el('span', '', "Hali g'alaba yo'q"));
+  wins.forEach(([r, w], i) => st.append(el('span', i === 0 ? 'best' : '', `${label(r)} ${w}×`)));
+  sh.append(st, el('h3', '', "🛒 Do'kon"), el('div', 'note', "Buyumlar kerak bo'lganda o'zi ishlatiladi. Har biri bir marta ishlaydi. O'yin davomida sotib olib bo'lmaydi."));
   const me = state?.players.find((p) => p.id === state.me.id);
   const inGame = me?.alive && !['lobby', 'end'].includes(state.phase);
   for (const [key, it] of Object.entries(shopList)) {

@@ -34,9 +34,18 @@ export async function init() {
       ADD COLUMN IF NOT EXISTS fake_doc INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS escape INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS first_night_streak INTEGER NOT NULL DEFAULT 0`);
+  // Har bir rolda nechta g'alaba
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS role_wins (
+      player_id BIGINT NOT NULL,
+      role TEXT NOT NULL,
+      wins INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (player_id, role)
+    )`);
 }
 
-const toProfile = (row) => ({
+const toProfile = (row, stats = {}) => ({
+  stats, // { rol: g'alabalar soni }
   coins: row?.coins ?? 0,
   items: Object.fromEntries(ITEMS.map((k) => [k, row?.[k] ?? 0])),
   streak: row?.first_night_streak ?? 0,
@@ -45,8 +54,11 @@ const toProfile = (row) => ({
 // Balans, buyumlar va 1-tun hisoblagichi
 export async function getProfile(id) {
   if (!pool) return null;
-  const { rows } = await pool.query('SELECT * FROM players WHERE id = $1', [id]);
-  return toProfile(rows[0]);
+  const [{ rows }, wins] = await Promise.all([
+    pool.query('SELECT * FROM players WHERE id = $1', [id]),
+    pool.query('SELECT role, wins FROM role_wins WHERE player_id = $1', [id]),
+  ]);
+  return toProfile(rows[0], Object.fromEntries(wins.rows.map((r) => [r.role, r.wins])));
 }
 
 export class ShopError extends Error {}
@@ -107,6 +119,13 @@ export async function award(winners, amount = COIN_REWARD) {
         [w.id, w.name, amount],
       );
       result.set(w.id, rows[0].coins);
+      if (w.role) {
+        await client.query(
+          `INSERT INTO role_wins (player_id, role, wins) VALUES ($1, $2, 1)
+           ON CONFLICT (player_id, role) DO UPDATE SET wins = role_wins.wins + 1`,
+          [w.id, w.role],
+        );
+      }
     }
     await client.query('COMMIT');
   } catch (e) {

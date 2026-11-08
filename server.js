@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { Bot, InlineKeyboard } from 'grammy';
-import { Game, GameError } from './game.js';
+import { Game, GameError, ROLES } from './game.js';
 import * as subs from './subs.js';
 import * as db from './db.js';
 
@@ -168,7 +168,9 @@ if (BOT_TOKEN) {
     const pr = await db.getProfile(ctx.from.id).catch(() => null);
     if (!pr) return ctx.reply("Balansni o'qib bo'lmadi, keyinroq urinib ko'ring.");
     const items = Object.entries(db.SHOP).map(([k, it]) => `${it.name}: ${pr.items[k]} ta`).join('\n');
-    return ctx.reply(`🪙 ${ctx.from.first_name}, balansingiz: ${pr.coins} YM coin\n\n${items}\n\nDo'kon ilova ichida: 🛒 tugmasi.`);
+    const roleName = (r) => (ROLES[r] ? `${ROLES[r].emoji} ${ROLES[r].name}` : r);
+    const wins = Object.entries(pr.stats).sort((a, b) => b[1] - a[1]).map(([r, w]) => `${roleName(r)}: ${w}×`).join('\n') || "Hali g'alaba yo'q";
+    return ctx.reply(`🪙 ${ctx.from.first_name}, balansingiz: ${pr.coins} YM coin\n\n🏆 G'alabalar:\n${wins}\n\n${items}\n\nDo'kon ilova ichida: 🛒 tugmasi.`);
   });
 
   bot.command('groupid', (ctx) => ctx.reply(`Guruh ID: ${ctx.chat.id}`));
@@ -214,6 +216,8 @@ async function rewardWinners(game) {
   const winners = players.filter((p) => game.winners.has(p.id));
   try {
     const balances = await db.award(winners);
+    for (const w of winners) w.stats = { ...w.stats, [w.role]: (w.stats?.[w.role] || 0) + 1 };
+    broadcast(game);
     game.announce(`🪙 G'oliblar ${db.COIN_REWARD} YM coin oldi:\n${winners.map((w) => `${w.name} — jami ${balances.get(w.id)} YM`).join('\n')}`);
     for (const ws of game.clients) {
       if (balances.has(ws.user.id)) {
@@ -235,7 +239,10 @@ function loadProfile(game, uid) {
   if (!db.COINS_ENABLED) return;
   db.getProfile(uid).then((pr) => {
     const p = game.players.get(uid);
-    if (p && game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; }
+    if (!p) return;
+    p.stats = pr.stats; // kartada eng ko'p yutgan roli ko'rinadi
+    if (game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; }
+    broadcast(game);
   }).catch((e) => console.error('getProfile:', e.message));
 }
 

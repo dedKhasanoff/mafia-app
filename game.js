@@ -71,6 +71,11 @@ const IDLE_NIGHTS = Number(process.env.IDLE_NIGHTS || 2);
 // Kim o'ldirgani (hujum turi bo'yicha)
 const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar', kamikadze: '💣 Kamikadze' };
 const killers = (kinds) => [...new Set(kinds)].map((k) => KILLER[k]).join(' va ');
+// Eng ko'p g'alaba qozongan rol: { role, wins } yoki null
+const topRole = (stats) => {
+  const best = Object.entries(stats || {}).filter(([r, w]) => ROLES[r] && w > 0).sort((a, b) => b[1] - a[1])[0];
+  return best ? { role: best[0], wins: best[1] } : null;
+};
 const label = (r) => `${ROLES[r].emoji} ${ROLES[r].name}`;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -818,6 +823,7 @@ export class Game {
         hasVoted: (this.phase === 'vote' && this.votes.has(p.id)) || (this.phase === 'confirm' && this.confirmVotes.has(p.id)),
         winner: ended && this.winners.has(p.id),
         hero: ended && this.isHero(p),
+        top: topRole(p.stats),
       })),
       teamPicks: MAFIA_TEAM.has(myRole) && this.phase === 'night'
         ? [...this.actions].filter(([u]) => u !== uid && SHOOTERS.has(this.players.get(u).role))

@@ -48,7 +48,12 @@ Bot ishga tushganda bu buyruqlarni Telegram'ga o'zi ro'yxatdan o'tkazadi, shunin
 Muhokama 30 soniya va ovoz berish 30 soniya: bular hamma ovoz berib bo'lsa ham vaqt tugaguncha davom etadi.
 
 **Tanlov:** tunda rol harakati ham, kunduzgi ovoz ham bir marta qilinadi va o'zgartirib bo'lmaydi.
-Kunduzi eng ko'p ovoz olgan odam osiladi. Ovozlar teng bo'lsa, ular orasidan qur'a tashlanadi.
+Kunduzi eng ko'p ovoz olgan odam dor oldiga chiqadi (teng bo'lsa, qur'a tashlanadi). Keyin 30 soniya
+«Osilsinmi? Ha / Yo'q» ovozi bo'ladi: «Ha» ko'p bo'lsa osiladi, teng yoki «Yo'q» ko'p bo'lsa avf etiladi.
+Bu ovoz yashirin: kim «Ha», kim «Yo'q» degani ko'rinmaydi, faqat natija soni e'lon qilinadi.
+Dor oldidagi o'yinchi bu ovozda qatnashmaydi, lekin mikrofonda o'zini oqlashi mumkin. Hamma ovoz bersa, darhol tugaydi.
+
+Kamikadze kunduzi osilsa bitta odamni tanlab olib ketadi; tunda otilsa, uni otganlardan birini o'zi bilan olib ketadi.
 Tungi roli bor o'yinchi 2 tun ketma-ket harakat qilmasa, o'yindan chiqariladi (birinchi tundan keyin ogohlantiriladi, `IDLE_NIGHTS`).
 
 **🎙 Mikrofon:** kunduzi (muhokama va ovoz berishda) tirik o'yinchilar pastdagi tugmani bosib turib
@@ -121,6 +126,7 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `NIGHT_SEC` | 60 | Tun davomiyligi |
 | `DAY_SEC` | 30 | Muhokama |
 | `VOTE_SEC` | 30 | Ovoz berish |
+| `CONFIRM_SEC` | 30 | «Osilsinmi?» ovozi |
 | `KAMIKAZE_SEC` | 20 | Kamikadze tanlash vaqti |
 | `MIN_PLAYERS` | 4 | Eng kam o'yinchi |
 | `SUB_PRICE` | 500 | Obuna narxi (Stars, oyiga) |

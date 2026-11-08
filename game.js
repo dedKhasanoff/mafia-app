@@ -7,6 +7,7 @@ const DUR = {
   day: Number(process.env.DAY_SEC || 30),
   vote: Number(process.env.VOTE_SEC || 30),
   kamikaze: Number(process.env.KAMIKAZE_SEC || 20),
+  confirm: Number(process.env.CONFIRM_SEC || 30),
 };
 const LUCKY_CHANCE = 0.7;
 // TEST_BOTS=1: o'yin egasi lobbida sun'iy o'yinchilar qo'sha oladi (sinash uchun)
@@ -68,7 +69,7 @@ const FIRST_NIGHT_STREAK = 2;
 // Tungi roli bor o'yinchi shuncha tun ketma-ket harakat qilmasa, o'yindan chiqariladi
 const IDLE_NIGHTS = Number(process.env.IDLE_NIGHTS || 2);
 // Kim o'ldirgani (hujum turi bo'yicha)
-const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar' };
+const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar', kamikadze: '💣 Kamikadze' };
 const killers = (kinds) => [...new Set(kinds)].map((k) => KILLER[k]).join(' va ');
 const label = (r) => `${ROLES[r].emoji} ${ROLES[r].name}`;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -91,6 +92,8 @@ export class Game {
     this.timer = null;
     this.actions = new Map();   // tunda: uid -> {targets: [id], mode}
     this.votes = new Map();     // kunduzi: uid -> id
+    this.accusedId = null;      // dor oldidagi o'yinchi
+    this.confirmVotes = new Map(); // "Osilsinmi?": uid -> true (ha) | false (yo'q)
     this.checks = [];           // komissar tekshiruvlari: {round, target, role, revealed}
     this.notes = new Map();     // shaxsiy xabarlar: uid -> [{round, text}]
     this.dayBlocked = null;     // Ma'shuqa band qilgan odam (shu kuni ovoz bermaydi)
@@ -190,6 +193,9 @@ export class Game {
           const targets = [...pool].sort(() => Math.random() - 0.5).slice(0, n).map((p) => p.id);
           if (targets.length === n) this.act(b.id, targets, Math.random() < 0.5 ? 'check' : 'shoot');
         });
+      }
+      if (phase === 'confirm' && b.id !== this.dayBlocked && b.id !== this.accusedId) {
+        later(() => this.castConfirm(b.id, Math.random() < 0.6));
       }
       if (phase === 'vote' && b.id !== this.dayBlocked) {
         later(() => this.castVote(b.id, pick(others()).id));
@@ -315,6 +321,8 @@ export class Game {
     // 4. Kim o'ladi
     const deaths = new Map(); // uid -> 'killed' | 'guard'
     const killedBy = new Map(); // uid -> hujum turlari ('mafia' | 'qotil' | 'komissar')
+    const killedAttacks = new Map(); // uid -> uni o'ldirgan hujumlar
+    const blastBy = new Map(); // Kamikadze olib ketgan odam -> Kamikadze
     const savedNote = new Set(); // qutqarilganlar (tashrif xabari takrorlanmasin)
     let survivedAttack = false;
     const byTarget = new Map();
@@ -354,8 +362,20 @@ export class Game {
       if (rest.length) {
         if (!deaths.has(tid)) deaths.set(tid, 'killed');
         killedBy.set(tid, rest.map((a) => a.kind));
+        killedAttacks.set(tid, rest);
       }
       else survivedAttack = true;
+    }
+
+    // Tunda otilgan Kamikadze uni otganlardan birini o'zi bilan olib ketadi
+    for (const [tid, why] of [...deaths]) {
+      if (why !== 'killed' || P(tid).role !== 'kamikadze') continue;
+      const shooters = [...new Set(killedAttacks.get(tid).flatMap((a) => a.by))].filter((id) => !deaths.has(id));
+      if (!shooters.length) continue;
+      const victim = pick(shooters);
+      deaths.set(victim, 'blast');
+      killedBy.set(victim, ['kamikadze']);
+      blastBy.set(victim, tid);
     }
 
     // 5. Ma'lumot oluvchilar
@@ -410,6 +430,11 @@ export class Game {
       const p = P(uid);
       p.alive = false;
       const by = killers(killedBy.get(uid) || []);
+      if (why === 'blast') {
+        lines.push(`💣 ${P(blastBy.get(uid)).name} Kamikadze edi: portlab, o'zi bilan uni otgan ${p.name}ni olib ketdi. ${p.name} ${label(p.role)} edi.`);
+        this.note(uid, "💣 Siz Kamikadzeni otdingiz — u portlab, sizni o'zi bilan olib ketdi.");
+        continue;
+      }
       if (why === 'guard') lines.push(`🛡 ${p.name} kimnidir himoya qilib, ${by} o'qini o'ziga oldi va halok bo'ldi. U ${label(p.role)} edi.`);
       else lines.push(`💀 ${p.name}ni ${by} o'ldirdi. U ${label(p.role)} edi.`);
       this.note(uid, why === 'guard' ? `💀 Siz himoya qilgan odamni qutqarib, ${by} qo'lida halok bo'ldingiz.` : `💀 Sizni ${by} o'ldirdi.`);
@@ -523,7 +548,60 @@ export class Game {
       const msg = '⚖️ Hech kim ovoz bermadi — hech kim osilmadi.';
       this.addLog(msg);
       this.announce(msg);
-    } else if (lynched.role !== 'suidsid' && this.useItem(lynched, 'escape')) {
+      if (this.checkWin()) return;
+      return this.startNight();
+    }
+    // Eng ko'p ovoz olgan dor oldiga chiqadi, shahar "Osilsinmi?" deb ovoz beradi
+    this.accusedId = lynched.id;
+    this.confirmVotes.clear();
+    const msg = `⚖️ ${lynched.name} dor oldiga chiqdi! Osilsinmi? Ilovada «Ha» yoki «Yo'q» ni tanlang.`;
+    this.addLog(msg);
+    this.beginPhase('confirm');
+    this.announce(msg, true);
+    this.schedule(DUR.confirm, () => this.resolveConfirm());
+    this.botsPlay();
+    this.onChange();
+  }
+
+  get confirmVoters() {
+    return this.alive.filter((p) => p.id !== this.accusedId && p.id !== this.dayBlocked);
+  }
+
+  castConfirm(id, yes) {
+    if (this.phase !== 'confirm') throw new GameError('Hozir bu ovoz vaqti emas');
+    if (!this.confirmVoters.some((p) => p.id === id)) throw new GameError('Siz bu ovozda qatnasha olmaysiz');
+    if (this.confirmVotes.has(id)) throw new GameError("Ovoz berilgan, uni o'zgartirib bo'lmaydi");
+    this.confirmVotes.set(id, !!yes);
+    if (this.confirmVoters.every((p) => this.confirmVotes.has(p.id))) return this.resolveConfirm();
+    this.onChange();
+  }
+
+  resolveConfirm() {
+    if (this.phase !== 'confirm') return;
+    clearTimeout(this.timer);
+    const lynched = this.players.get(this.accusedId);
+    this.accusedId = null;
+    let yes = 0;
+    let no = 0;
+    for (const [uid, v] of this.confirmVotes) {
+      const weight = this.players.get(uid).role === 'mer' ? 2 : 1;
+      if (v) yes += weight; else no += weight;
+    }
+    // Yashirin ovoz: kim nima degani aytilmaydi, faqat natija
+    this.announce(`⚖️ ${lynched.name} osilsinmi?\n👍 Ha: ${yes} · 👎 Yo'q: ${no}`);
+    if (yes <= no) {
+      const msg = `🕊 Shahar ${lynched.name}ni avf etdi — u osilmadi (Ha: ${yes}, Yo'q: ${no}).`;
+      this.addLog(msg);
+      this.announce(msg);
+      if (this.checkWin()) return;
+      return this.startNight();
+    }
+    this.hang(lynched);
+  }
+
+  // Osish: buyum, Kamikadze va Suidsid holatlari bilan
+  hang(lynched) {
+    if (lynched.role !== 'suidsid' && this.useItem(lynched, 'escape')) {
       const msg = `⚖️ Shahar ${lynched.name}ni osishga qaror qildi... lekin u 🎟 Osilishdan qutulishni ishlatdi va omon qoldi!`;
       this.addLog(msg);
       this.announce(msg);
@@ -634,7 +712,7 @@ export class Game {
   // Kunduzi (muhokama va ovoz berishda) faqat tirik o'yinchilar mikrofonda gapira oladi
   canSpeak(uid) {
     const p = this.players.get(uid);
-    return !!p?.alive && (this.phase === 'day' || this.phase === 'vote');
+    return !!p?.alive && ['day', 'vote', 'confirm'].includes(this.phase);
   }
 
   isHero(p) { return p.role === 'kamikadze' && !p.alive; }
@@ -688,11 +766,13 @@ export class Game {
     if (me?.alive) {
       if (this.phase === 'night') canAct = NIGHT_ROLES.has(myRole);
       if (this.phase === 'vote') canAct = uid !== this.dayBlocked;
+      if (this.phase === 'confirm') canAct = uid !== this.dayBlocked && uid !== this.accusedId;
     }
     if (this.phase === 'kamikaze') canAct = uid === this.kamikazeId;
 
     let choice = null;
     if (this.phase === 'night' && this.actions.has(uid)) choice = this.actions.get(uid);
+    if (this.phase === 'confirm' && this.confirmVotes.has(uid)) choice = { yes: this.confirmVotes.get(uid), targets: [] };
     if (this.phase === 'vote' && this.votes.has(uid)) {
       const v = this.votes.get(uid);
       choice = { targets: [v] };
@@ -713,13 +793,16 @@ export class Game {
       testBots: TEST_BOTS,
       winner: this.winner,
       kamikazeId: this.kamikazeId,
+      accusedId: this.phase === 'confirm' ? this.accusedId : null,
+      // Yashirin ovoz: faqat nechta odam ovoz bergani, kim nima degani yuborilmaydi
+      confirm: this.phase === 'confirm' ? { voted: this.confirmVotes.size, total: this.confirmVoters.length } : null,
       roles: ROLES,
       me: {
         id: uid,
         joined: !!me,
         alive: me?.alive ?? false,
         role: myRole,
-        blocked: uid === this.dayBlocked && (this.phase === 'day' || this.phase === 'vote'),
+        blocked: uid === this.dayBlocked && ['day', 'vote', 'confirm'].includes(this.phase),
         choice,
         canAct,
         canSpeak: this.canSpeak(uid),
@@ -732,7 +815,7 @@ export class Game {
         role: knows(p) ? p.role : null,
         votes: voteCount.get(p.id) || 0,
         voters: votersOf.get(p.id) || [],
-        hasVoted: this.phase === 'vote' && this.votes.has(p.id),
+        hasVoted: (this.phase === 'vote' && this.votes.has(p.id)) || (this.phase === 'confirm' && this.confirmVotes.has(p.id)),
         winner: ended && this.winners.has(p.id),
         hero: ended && this.isHero(p),
       })),

@@ -11,7 +11,7 @@
     --text: #eef1ff; --muted: #8b94bd; --accent: #7c8cff; --danger: #ff5d6c;
     --ok: #4ad295; --gold: #ffc65c; --sky: linear-gradient(180deg, #121a3a 0%, #0d1224 70%);
   }
-  body[data-phase="day"], body[data-phase="vote"], body[data-phase="kamikaze"] {
+  body[data-phase="day"], body[data-phase="vote"], body[data-phase="confirm"], body[data-phase="kamikaze"] {
     --bg: #1d1712; --bg2: #2a2017; --card: #33271c; --line: #4a3a29;
     --text: #fff6ea; --muted: #c2a98c; --accent: #ffa94d;
     --sky: linear-gradient(180deg, #4a2f1a 0%, #1d1712 70%);
@@ -106,6 +106,12 @@
   }
   .picks { font-size: 11px; color: var(--danger); margin-top: 2px; }
   .voters { font-size: 11px; color: var(--accent); margin-top: 3px; line-height: 1.3; word-break: break-word; }
+  .player.accused { border-color: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
+  .confirm-box { display: flex; gap: 8px; }
+  .confirm-box button { flex: 1; }
+  .btn.yes { background: var(--danger); color: #fff; }
+  .btn.no { background: var(--ok); color: #0b1a12; }
+  .confirm-tally { font-size: 13px; text-align: center; color: var(--muted); line-height: 1.5; }
   .group-title {
     grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px;
     font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
@@ -191,10 +197,10 @@
   .cloud::before { width: 34px; height: 34px; left: 14px; top: -16px; }
   .cloud::after { width: 26px; height: 26px; left: 40px; top: -10px; }
   @keyframes drift { from { transform: translateX(-140px); } to { transform: translateX(110vw); } }
-  body:not([data-phase="day"]):not([data-phase="vote"]):not([data-phase="kamikaze"]) #sun,
-  body:not([data-phase="day"]):not([data-phase="vote"]):not([data-phase="kamikaze"]) #clouds { opacity: 0; transform: translateY(160px); }
-  body[data-phase="day"] #moon, body[data-phase="vote"] #moon, body[data-phase="kamikaze"] #moon,
-  body[data-phase="day"] #stars, body[data-phase="vote"] #stars, body[data-phase="kamikaze"] #stars { opacity: 0; transform: translateY(160px); }
+  body:not([data-phase="day"]):not([data-phase="vote"]):not([data-phase="confirm"]):not([data-phase="kamikaze"]) #sun,
+  body:not([data-phase="day"]):not([data-phase="vote"]):not([data-phase="confirm"]):not([data-phase="kamikaze"]) #clouds { opacity: 0; transform: translateY(160px); }
+  body[data-phase="day"] #moon, body[data-phase="vote"] #moon, body[data-phase="confirm"] #moon, body[data-phase="kamikaze"] #moon,
+  body[data-phase="day"] #stars, body[data-phase="vote"] #stars, body[data-phase="confirm"] #stars, body[data-phase="kamikaze"] #stars { opacity: 0; transform: translateY(160px); }
 
   /* ---------- Faza sahnasi ---------- */
   #scene {
@@ -204,6 +210,7 @@
   #scene.show { opacity: 1; pointer-events: auto; }
   #scene.night { background: radial-gradient(ellipse at 50% 30%, #1c2757, #070a18 75%); color: #eef1ff; }
   #scene.day { background: radial-gradient(ellipse at 50% 90%, #ffb057, #b8552a 45%, #3a1f12 90%); color: #fff6ea; }
+  #scene.confirm { background: radial-gradient(ellipse at 50% 40%, #6b2a1e, #1d1712 80%); color: #fff6ea; }
   #scene.vote { background: radial-gradient(ellipse at 50% 40%, #5b3a1e, #1d1712 80%); color: #fff6ea; }
   #scene.kamikaze { background: radial-gradient(circle at 50% 45%, #ff7a2f, #6b1408 55%, #150503); color: #fff; }
   #scene.end { background: radial-gradient(ellipse at 50% 30%, #2d2a52, #0b0a18 80%); color: #fff; }
@@ -354,6 +361,7 @@ function showScene(s) {
   if (s.phase === 'night') { icon = '🌙'; title = `${s.round}-tun`; sub = 'Shahar uxlaydi…'; tg?.HapticFeedback?.notificationOccurred('warning'); }
   else if (s.phase === 'day') { icon = '☀️'; title = 'Tong otdi'; sub = `${s.round}-kun`; tg?.HapticFeedback?.notificationOccurred('success'); }
   else if (s.phase === 'vote') { icon = '🗳'; title = 'Ovoz berish'; sub = 'Kimni osamiz?'; tg?.HapticFeedback?.notificationOccurred('warning'); }
+  else if (s.phase === 'confirm') { icon = '⚖️'; title = `${nameOf(s.accusedId)} dor oldida`; sub = 'Osilsinmi?'; tg?.HapticFeedback?.notificationOccurred('warning'); }
   else if (s.phase === 'kamikaze') { icon = '💣'; title = 'Kamikadze!'; tg?.HapticFeedback?.impactOccurred('heavy'); }
   else if (s.phase === 'end') {
     icon = WIN_ICON[s.winner] || '⛔'; title = WIN_TEXT[s.winner] || "O'yin to'xtatildi";
@@ -569,6 +577,10 @@ function hintText() {
   }
   if (me.blocked) return "💃🏼 Ma'shuqa sizni band qildi — bugun ovoz bera olmaysiz.";
   if (s.phase === 'day') return '🗣 Muhokama: kim jinoyatchi? 🎙 tugmasini bosib turib gapiring.';
+  if (s.phase === 'confirm') {
+    if (s.accusedId === me.id) return "⚖️ Siz dor oldidasiz! 🎙 Mikrofonda o'zingizni oqlang.";
+    return me.choice ? '✅ Ovozingiz qabul qilindi.' : `⚖️ ${nameOf(s.accusedId)} osilsinmi? Pastdan tanlang. Ovozni o'zgartirib bo'lmaydi.`;
+  }
   if (s.phase === 'vote') return me.choice ? '✅ Ovozingiz qabul qilindi.' : "Kimni osamiz? O'yinchini bosing. Ovozni o'zgartirib bo'lmaydi.";
   return '';
 }
@@ -579,7 +591,7 @@ function render() {
   document.body.dataset.phase = s.phase;
   const titles = {
     lobby: "🎭 Ro'yxatdan o'tish", night: `🌙 ${s.round}-tun`, day: `☀️ ${s.round}-kun`,
-    vote: '🗳 Ovoz berish', kamikaze: '💣 Kamikadze', end: "O'yin tugadi",
+    vote: '🗳 Ovoz berish', confirm: '⚖️ Dor oldida', kamikaze: '💣 Kamikadze', end: "O'yin tugadi",
   };
   $('phase').textContent = titles[s.phase];
   const alive = s.players.filter((p) => p.alive).length;
@@ -656,6 +668,7 @@ function render() {
     if (selectable) c.classList.add('selectable');
     if (chosen.has(p.id)) c.classList.add('selected');
     if (talkingId === p.id) c.classList.add('talking');
+    if (s.accusedId === p.id) c.classList.add('accused');
     c.append(avatar(p), el('div', 'name', p.id === me.id ? `${p.name} (siz)` : p.name));
 
     let tag = '';
@@ -696,6 +709,21 @@ function render() {
     if (me.id === s.hostId) button("▶️ O'yinni boshlash", () => sendMsg({ type: 'start' }), false, s.players.length < s.minPlayers);
     if (me.id === s.hostId && s.testBots) button("🤖 Test bot qo'shish", () => sendMsg({ type: 'addBot' }), true, s.players.length >= s.maxPlayers);
     if (me.joined) button('Chiqish', () => sendMsg({ type: 'leave' }), true);
+  }
+  if (s.phase === 'confirm') {
+    if (me.canAct && !me.choice) {
+      const box = el('div', 'confirm-box');
+      const yes = el('button', 'btn yes', '👍 Ha, osilsin');
+      yes.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'confirm', yes: true }); };
+      const no = el('button', 'btn no', "👎 Yo'q");
+      no.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'confirm', yes: false }); };
+      box.append(yes, no);
+      act.append(box);
+    }
+    const t = el('div', 'confirm-tally');
+    const list = (ids) => (ids.length ? ids.map(nameOf).join(', ') : '—');
+    t.append(el('div', '', `👍 Ha (${s.confirm.yes.length}): ${list(s.confirm.yes)}`), el('div', '', `👎 Yo'q (${s.confirm.no.length}): ${list(s.confirm.no)}`));
+    act.append(t);
   }
   if (s.phase === 'end') button('Yopish', () => tg?.close(), true);
 

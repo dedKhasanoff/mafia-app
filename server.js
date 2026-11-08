@@ -374,6 +374,7 @@ function handle(ws, msg) {
       return game.act(user.id, targets, msg.mode);
     }
     case 'vote': return game.castVote(user.id, Number(msg.target));
+    case 'confirm': return game.castConfirm(user.id, msg.yes === true);
     case 'kamikaze': return game.kamikazeTake(user.id, Number(msg.target));
     case 'reveal': return game.reveal(user.id, msg.index);
     default: return undefined;

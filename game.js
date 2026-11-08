@@ -65,6 +65,11 @@ const KOM_TEAM = new Set(['komissar', 'serjant']);
 const FAKE_ROLES = ['civil', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'omadli', 'jurnalist', 'mer', 'serjant'];
 // Ketma-ket shuncha o'yinda 1-tunda o'ldirilgan o'yinchi navbatdagi 1-tunda omon qoladi
 const FIRST_NIGHT_STREAK = 2;
+// Tungi roli bor o'yinchi shuncha tun ketma-ket harakat qilmasa, o'yindan chiqariladi
+const IDLE_NIGHTS = Number(process.env.IDLE_NIGHTS || 2);
+// Kim o'ldirgani (hujum turi bo'yicha)
+const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar' };
+const killers = (kinds) => [...new Set(kinds)].map((k) => KILLER[k]).join(' va ');
 const label = (r) => `${ROLES[r].emoji} ${ROLES[r].name}`;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -308,6 +313,8 @@ export class Game {
 
     // 4. Kim o'ladi
     const deaths = new Map(); // uid -> 'killed' | 'guard'
+    const killedBy = new Map(); // uid -> hujum turlari ('mafia' | 'qotil' | 'komissar')
+    const savedNote = new Set(); // qutqarilganlar (tashrif xabari takrorlanmasin)
     let survivedAttack = false;
     const byTarget = new Map();
     for (const a of attacks) {
@@ -317,10 +324,18 @@ export class Game {
     for (const [tid, list] of byTarget) {
       const t = P(tid);
       let rest = list;
-      if (doctorSave === tid) rest = [];
+      if (doctorSave === tid) {
+        rest = [];
+        this.note(tid, `🔫 Bu tun sizga ${killers(list.map((a) => a.kind))} suiqasd qildi, lekin 👨🏼‍⚕️ Doktor sizni qutqardi!`);
+        savedNote.add(tid);
+      }
       if (rest.length && guarded === tid && rest.some((a) => a.kind !== 'komissar')) {
+        const absorbed = rest.filter((a) => a.kind !== 'komissar').map((a) => a.kind);
         rest = rest.filter((a) => a.kind === 'komissar');
         deaths.set(guard.id, 'guard');
+        killedBy.set(guard.id, absorbed);
+        this.note(tid, `🔫 Bu tun sizga ${killers(absorbed)} suiqasd qildi, lekin 🛡 Qo'riqchi o'q yo'liga turib sizni qutqardi!`);
+        savedNote.add(tid);
       }
       if (rest.length && this.round === 1 && t.streak >= FIRST_NIGHT_STREAK) {
         rest = [];
@@ -335,7 +350,10 @@ export class Game {
         rest = [];
         this.note(t.id, `🛡 Bu tun sizga suiqasd qilishdi, lekin Himoya sizni qutqardi! (qoldi: ${t.items.shield})`);
       }
-      if (rest.length) { if (!deaths.has(tid)) deaths.set(tid, 'killed'); }
+      if (rest.length) {
+        if (!deaths.has(tid)) deaths.set(tid, 'killed');
+        killedBy.set(tid, rest.map((a) => a.kind));
+      }
       else survivedAttack = true;
     }
 
@@ -348,6 +366,8 @@ export class Game {
         if (!['civil', 'suidsid'].includes(ROLES[shown].side) && this.useItem(t, 'fake_doc')) {
           shown = pick(FAKE_ROLES);
           this.note(t.id, `📄 Komissar sizni tekshirdi, lekin Soxta hujjat sizni ${label(shown)} qilib ko'rsatdi.`);
+        } else {
+          this.note(t.id, '🕵️ Bu tun Komissar sizni tekshirdi.');
         }
         this.checks.push({ round: this.round, target: t.id, role: shown, revealed: false });
         for (const s of this.aliveWith('serjant')) this.note(s.id, `🕵️ Komissar ${t.name}ni tekshirdi: ${label(shown)}`);
@@ -369,6 +389,16 @@ export class Game {
         ? `🧙🏼‍♂️ ${t.name}ning uyida guvoh bo'ldingiz: unga ${seen.join(', ')} suiqasd qildi!`
         : `🧙🏼‍♂️ ${t.name}ning uyida tinch edi, hech kim kelmadi.`);
     }
+    // Tashrif xabarlari: kim sizning oldingizga kelgani
+    const doc = one('doktor');
+    if (doctorSave != null && doctorSave !== doc?.id && !savedNote.has(doctorSave)) {
+      this.note(doctorSave, '👨🏼‍⚕️ Bu tun Doktor sizni tekshirib, davoladi.');
+    }
+    if (guarded != null && !savedNote.has(guarded)) this.note(guarded, "🛡 Bu tun Qo'riqchi sizni qo'riqladi.");
+    if (disguised != null) this.note(disguised, '👨🏼‍💼 Bu tun Advokat sizni himoya qildi.');
+    if (valid(daydi)) this.note(tgt(daydi), "🧙🏼‍♂️ Bu tun Daydi uyingizga shisha so'rab kirdi.");
+    if (valid(jur)) for (const id of this.actions.get(jur.id).targets) this.note(id, '📰 Bu tun Jurnalist siz haqingizda surishtirdi.');
+
     if (blocked && P(blocked).alive) {
       this.note(blocked, "💃🏼 Bu tun Ma'shuqa sizni band qildi: tungi harakatingiz bekor bo'ldi va bugun ovoz bera olmaysiz.");
     }
@@ -378,8 +408,22 @@ export class Game {
     for (const [uid, why] of deaths) {
       const p = P(uid);
       p.alive = false;
-      if (why === 'guard') lines.push(`🛡 ${p.name} kimnidir himoya qilib halok bo'ldi. U ${label(p.role)} edi.`);
-      else lines.push(`💀 ${p.name} o'ldirildi. U ${label(p.role)} edi.`);
+      const by = killers(killedBy.get(uid) || []);
+      if (why === 'guard') lines.push(`🛡 ${p.name} kimnidir himoya qilib, ${by} o'qini o'ziga oldi va halok bo'ldi. U ${label(p.role)} edi.`);
+      else lines.push(`💀 ${p.name}ni ${by} o'ldirdi. U ${label(p.role)} edi.`);
+      this.note(uid, why === 'guard' ? `💀 Siz himoya qilgan odamni qutqarib, ${by} qo'lida halok bo'ldingiz.` : `💀 Sizni ${by} o'ldirdi.`);
+    }
+    // Faol bo'lmaganlar: tungi roli bor, lekin harakat qilmagan tirik o'yinchilar
+    for (const p of this.alive.filter((x) => NIGHT_ROLES.has(x.role))) {
+      if (this.actions.has(p.id)) { p.idle = 0; continue; }
+      p.idle = (p.idle || 0) + 1;
+      if (p.idle >= IDLE_NIGHTS) {
+        p.alive = false;
+        lines.push(`🚪 ${p.name} ${IDLE_NIGHTS} tun ketma-ket harakat qilmagani uchun o'yindan chiqarildi. U ${label(p.role)} edi.`);
+        this.note(p.id, `🚪 Siz ${IDLE_NIGHTS} tun ketma-ket harakat qilmadingiz va o'yindan chiqarildingiz.`);
+      } else {
+        this.note(p.id, `⚠️ Bu tun harakat qilmadingiz. Yana ${IDLE_NIGHTS - p.idle} tun harakat qilmasangiz, o'yindan chiqarilasiz.`);
+      }
     }
     if (!lines.length) lines.push(survivedAttack ? "Bu tun suiqasd bo'ldi, lekin hamma omon qoldi!" : "Tun tinch o'tdi.");
     for (const l of lines) this.addLog(l);

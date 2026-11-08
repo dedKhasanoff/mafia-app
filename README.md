@@ -49,6 +49,7 @@ tun 1 daqiqa, muhokama 30 soniya, ovoz berish 30 soniya.
 
 **Tanlov:** tunda rol harakati ham, kunduzgi ovoz ham bir marta qilinadi va o'zgartirib bo'lmaydi.
 Kunduzi eng ko'p ovoz olgan odam osiladi. Ovozlar teng bo'lsa, ular orasidan qur'a tashlanadi.
+Tungi roli bor o'yinchi 2 tun ketma-ket harakat qilmasa, o'yindan chiqariladi (birinchi tundan keyin ogohlantiriladi, `IDLE_NIGHTS`).
 
 **🎙 Mikrofon:** kunduzi (muhokama va ovoz berishda) tirik o'yinchilar pastdagi tugmani bosib turib
 gapiradi (eng ko'pi 20 soniya). Qo'yib yuborilganda ovoz o'yindagi hammaga eshittiriladi. Tunda, o'lganlar
@@ -128,6 +129,7 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `SUPPORT_TEXT` | — | `/paysupport` javobi (masalan, `Savollar: @username`) |
 | `DATABASE_URL` | — | Postgres manzili (YM coin uchun), masalan Neon'dan |
 | `COIN_REWARD` | 20 | Har bir g'olibga beriladigan YM coin |
+| `IDLE_NIGHTS` | 2 | Shuncha tun harakat qilmagan o'yinchi chiqariladi |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)

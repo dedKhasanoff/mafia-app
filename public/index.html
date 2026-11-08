@@ -106,6 +106,13 @@
   }
   .picks { font-size: 11px; color: var(--danger); margin-top: 2px; }
   .voters { font-size: 11px; color: var(--accent); margin-top: 3px; line-height: 1.3; word-break: break-word; }
+  .group-title {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px;
+    font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
+  }
+  .group-title::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+  .group-title.win { color: var(--gold); }
+  .scene-events div.mine { background: rgba(124,140,255,.18); border-color: rgba(124,140,255,.45); }
   .skipline { font-size: 12px; color: var(--muted); text-align: center; }
 
   #actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -360,9 +367,13 @@ function showScene(s) {
   $('sceneTitle').textContent = title;
   $('sceneSub').textContent = sub;
   const ev = $('sceneEvents'); ev.replaceChildren();
-  (s.events || []).slice(-6).forEach((text, i) => {
+  // Umumiy voqealar va shu tundagi shaxsiy xabarlaringiz
+  const mine = s.phase === 'day' ? (s.notes || []).filter((n) => n.round === s.round).map((n) => n.text) : [];
+  const items = [...(s.events || []).slice(-6).map((text) => ({ text })), ...mine.map((text) => ({ text, mine: true }))];
+  items.forEach((it, i) => {
     const d = document.createElement('div');
-    d.textContent = text;
+    d.textContent = it.text;
+    if (it.mine) d.className = 'mine';
     d.style.animationDelay = `${0.9 + i * 0.7}s`;
     ev.append(d);
   });
@@ -371,7 +382,7 @@ function showScene(s) {
   sceneOpen = true;
   render();
   clearTimeout(sceneTimer);
-  const n = (s.events || []).length;
+  const n = items.length;
   sceneTimer = setTimeout(hideScene, Math.min(2600 + n * 900, s.phase === 'end' ? 9000 : 7500));
 }
 
@@ -485,7 +496,8 @@ function colorFor(id) { return `hsl(${(Number(id) * 47) % 360} 55% 45%)`; }
 function avatar(p) {
   const a = el('div', 'avatar');
   a.style.background = colorFor(p.id);
-  const initials = p.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  // Array.from: ism emoji bilan boshlansa ham belgini buzmasdan olamiz
+  const initials = p.name.split(/\s+/).filter(Boolean).map((w) => Array.from(w)[0]).slice(0, 2).join('').toUpperCase();
   if (p.photo) {
     const img = new Image(); img.src = p.photo; img.alt = '';
     img.onerror = () => { a.textContent = initials; };
@@ -623,7 +635,18 @@ function render() {
   // O'yinchilar
   const chosen = new Set(me.role === 'jurnalist' && s.phase === 'night' && pending.length ? pending : me.choice?.targets || []);
   const grid = $('grid'); grid.replaceChildren();
-  for (const p of s.players) {
+  // Guruhlar: lobbida hammasi birga; o'yinda tiriklar va o'lganlar; oxirida g'oliblar va mag'lublar
+  let groups;
+  if (s.phase === 'lobby') groups = [[null, s.players]];
+  else if (s.phase === 'end' && s.winner !== null) {
+    groups = [["🏆 G'oliblar", s.players.filter((p) => p.winner), 'win'], ["Mag'lublar", s.players.filter((p) => !p.winner)]];
+  } else {
+    groups = [['🟢 Tiriklar', s.players.filter((p) => p.alive)], ["💀 O'lganlar", s.players.filter((p) => !p.alive)]];
+  }
+  for (const [title, list, cls] of groups) {
+  if (!list.length) continue;
+  if (title) grid.append(el('div', `group-title${cls ? ` ${cls}` : ''}`, `${title} · ${list.length}`));
+  for (const p of list) {
     const c = el('div', 'player');
     if (fx.enter.has(p.id)) c.classList.add('enter');
     if (!sceneOpen && fx.dying.has(p.id)) c.classList.add('dying');
@@ -651,6 +674,7 @@ function render() {
 
     if (selectable) c.onclick = () => onPick(p);
     grid.append(c);
+  }
   }
   fx.enter.clear();
   fx.bump.clear();

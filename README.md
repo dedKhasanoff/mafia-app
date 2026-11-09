@@ -35,12 +35,13 @@ public/index.html Mini App oynasi
 
 ## 4. O'ynash
 
-1. Botni guruhga qo'shing va `/newgame` yozing.
+1. Botni guruhga qo'shing va **admin** qiling (xabarlarni o'chirish huquqi bilan), keyin `/newgame` yozing.
 2. «🎭 O'yinni ochish» tugmasini bosing → ilovada **Qo'shilish**.
 3. Birinchi qo'shilgan odam (👑) **O'yinni boshlash**ni bosadi (kamida 4 kishi).
 4. O'yin boshlanganda rolingiz katta karta bo'lib chiqadi, keyin tepada doim ko'rinib turadi.
 
-Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/balans` (YM coin), `/obuna` (obuna holati yoki to'lov),
+Buyruqlar: `/newgame`, `/stopgame` (o'yin egasi yoki admin), `/balans` (YM coin), `/bonus` (kunlik bonus),
+`/top` (reyting), `/sozlamalar` (guruh adminlari), `/obuna` (obuna holati yoki to'lov),
 `/groupid` (guruh ID'si), `/paysupport` (to'lov bo'yicha yordam).
 Bot ishga tushganda bu buyruqlarni Telegram'ga o'zi ro'yxatdan o'tkazadi, shuning uchun `/` yozilganda ro'yxat chiqadi.
 
@@ -63,6 +64,21 @@ va tomoshabinlar gapira olmaydi, lekin eshitadi. Ovozlar serverda saqlanmaydi.
 **🤖 Test botlari:** `TEST_BOTS=1` yoqilsa, o'yin egasi lobbida sun'iy o'yinchilar qo'sha oladi.
 Ular tunda va ovoz berishda o'zi tasodifiy tanlaydi. Kam odam bilan sinash uchun.
 
+**🧹 Guruhda tartib:** o'yin davomida tunda o'yinchilar yozgan va o'lgan o'yinchilar yozgan xabarlar o'chiriladi.
+O'yinda qatnashmayotganlarning xabarlariga tegilmaydi. Bot admin bo'lmasa, guruhga bir marta ogohlantirish yuboradi.
+
+**🤵🏻 Mafia chati:** tunda Don, Mafia va Advokat ilova ichida faqat o'zaro yozishadi.
+
+**🕯 So'nggi so'z:** tunda o'ldirilgan o'yinchi ertasi kuni ilovada bitta xabar qoldiradi, u guruhga e'lon qilinadi.
+
+**🔔 Lichkaga xabarlar:** bot rolingizni, tun boshlanganini (tungi roli borlarga) va shaxsiy xabarlarni
+("Komissar sizni tekshirdi" va h.k.) lichkaga yuboradi. Buning uchun har bir o'yinchi botga bir marta `/start` bosishi kerak.
+
+**⚙️ Guruh sozlamalari:** guruh admini `/sozlamalar` yozadi: tun, muhokama, ovoz va dor oldida vaqtlarini
+tugma bilan o'zgartiradi, ixtiyoriy rollarni yoqadi/o'chiradi (o'chirilgan rol o'rniga Tinch aholi). Keyingi `/newgame` dan ishlaydi.
+
+**🔊 Tovushlar:** tun, tong, o'q, ovoz berish, dor oldida va g'alaba tovushlari. Tepadagi 🔊 tugmasi bilan o'chiriladi.
+
 ## 🪙 YM coin
 
 O'yin g'olib bilan tugaganda har bir g'olib 20 YM coin oladi (`COIN_REWARD`). Balans ilovaning tepasida
@@ -70,6 +86,13 @@ va botda `/balans` buyrug'i bilan ko'rinadi. Test botlari qatnashgan o'yinda coi
 
 **🏆 Rollar bo'yicha g'alabalar:** har bir g'alaba qaysi rolda bo'lgani saqlanadi. O'yinchi kartasida eng ko'p
 yutgan roli ko'rinadi (masalan, "🏆 🤵🏻 Mafia 17×"), to'liq ro'yxat profilda va `/balans` da.
+
+**🎁 Kunlik bonus:** har kuni (Toshkent vaqti) bir marta 10 YM (`DAILY_BONUS`): profilda yoki `/bonus`.
+
+**⭐ Coin sotib olish:** profilda Telegram Stars bilan paketlar (`COIN_PACKS`, standart 50⭐=100, 100⭐=250, 250⭐=700 YM).
+Har bir to'lov bir marta hisoblanadi.
+
+**🏆 Reyting:** `/top` guruhda shu guruhning eng ko'p yutganlarini, lichkada umumiy reytingni ko'rsatadi.
 
 **🛒 Do'kon** (ilovada balans ustiga bosing). Buyumlar kerak bo'lganda o'zi ishlatiladi, har biri bir marta:
 
@@ -139,6 +162,9 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `DATABASE_URL` | — | Postgres manzili (YM coin uchun), masalan Neon'dan |
 | `COIN_REWARD` | 20 | Har bir g'olibga beriladigan YM coin |
 | `IDLE_NIGHTS` | 2 | Shuncha tun harakat qilmagan o'yinchi chiqariladi |
+| `DAILY_BONUS` | 10 | Kunlik bonus (YM) |
+| `COIN_PACKS` | `50:100,100:250,250:700` | Coin paketlari: `stars:coin`, vergul bilan |
+| `TELEGRAM_API_ROOT` | — | Boshqa Bot API manzili (odatda kerak emas) |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)

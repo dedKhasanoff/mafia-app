@@ -122,6 +122,7 @@ export class Game {
     this.winner = null;         // civil | mafia | qotil | draw
     this.winners = new Set();
     this.log = [];
+    this.createdAt = Date.now();
     this.pending = [];          // hali ko'rsatilmagan voqealar
     this.events = [];           // joriy faza animatsiyasidagi voqealar
     this.eventsId = 0;

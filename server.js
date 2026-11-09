@@ -444,6 +444,19 @@ async function claimBonusWs(ws) {
   }
 }
 
+// O'yinga faqat shu guruh a'zolari qo'shila oladi (havolani bilgan begonalar emas)
+async function joinGame(ws) {
+  const { game, user } = ws;
+  const chatId = Number(game.chatId);
+  if (bot && Number.isFinite(chatId) && !game.players.has(user.id)) {
+    const m = await bot.api.getChatMember(chatId, user.id).catch(() => null);
+    const member = m && (['creator', 'administrator', 'member'].includes(m.status) || (m.status === 'restricted' && m.is_member));
+    if (!member) throw new GameError("O'yinga qo'shilish uchun avval guruhga a'zo bo'ling");
+  }
+  game.join(user);
+  loadProfile(game, user.id);
+}
+
 // Do'kon: faqat o'yin davom etmayotganda (lobbida, o'yin tugagach yoki tomosha qilayotganda)
 async function buyItem(ws, item) {
   const { game, user } = ws;
@@ -499,6 +512,11 @@ function closeGame(game) {
 setInterval(() => {
   for (const game of games.values()) {
     if (game.phase === 'end' && Date.now() - (game.log.at(-1)?.t || 0) > 30 * 60 * 1000) closeGame(game);
+    // 2 soat ichida boshlanmagan lobbi yopiladi
+    if (game.phase === 'lobby' && Date.now() - game.createdAt > 2 * 60 * 60 * 1000) {
+      game.announce("⌛ O'yin 2 soat ichida boshlanmadi va yopildi. Yangi o'yin: /newgame");
+      closeGame(game);
+    }
   }
 }, 60 * 1000);
 
@@ -575,7 +593,10 @@ function handle(ws, msg) {
   const { game, user } = ws;
   if (!game) throw new GameError("Avval avtorizatsiyadan o'ting");
   switch (msg.type) {
-    case 'join': game.join(user); return loadProfile(game, user.id);
+    case 'join': return void joinGame(ws).catch((e) => {
+      if (!(e instanceof GameError)) console.error('join:', e.message);
+      send(ws, { type: 'error', message: e instanceof GameError ? e.message : "Qo'shilib bo'lmadi, qayta urinib ko'ring" });
+    });
     case 'buy': return void buyItem(ws, String(msg.item || '')).catch(() => {});
     case 'leave': return game.leave(user.id);
     case 'addBot': return game.addBot(user.id);
@@ -601,6 +622,10 @@ wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', (raw) => {
+    // Bir ulanishdan soniyasiga 20 tadan ortiq xabar kelsa, ortiqchasi tashlab yuboriladi
+    const now = Date.now();
+    if (now - (ws.rateStart || 0) > 1000) { ws.rateStart = now; ws.rateCount = 0; }
+    if (++ws.rateCount > 20) return;
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
     try {
@@ -633,7 +658,13 @@ if (db.COINS_ENABLED) {
 server.listen(PORT, async () => {
   console.log(`Server ${PORT}-portda ishlayapti${DEV_AUTH ? ' (DEV_AUTH yoqilgan!)' : ''}`);
   if (bot) {
-    const me = await bot.api.getMe();
+    let me;
+    try {
+      me = await bot.api.getMe();
+    } catch (e) {
+      console.error('Telegram bilan ulanib bo\'lmadi (BOT_TOKEN to\'g\'rimi?):', e.description || e.message);
+      process.exit(1); // Render serverni qayta ishga tushiradi
+    }
     botUsername = me.username;
     setCommandMenu().catch((e) => console.error('setMyCommands:', e.description || e.message));
     if (subs.SUBS_ENABLED) {
@@ -644,3 +675,18 @@ server.listen(PORT, async () => {
     bot.start({ onStart: () => console.log(`Bot @${botUsername} ishga tushdi`) });
   }
 });
+
+// Render yangi versiyani joylaganda serverni SIGTERM bilan to'xtatadi: o'yinchilarni ogohlantiramiz
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`${signal}: server to'xtatilmoqda`);
+  const running = [...games.values()].filter((g) => !['lobby', 'end'].includes(g.phase));
+  await Promise.all(running.map((g) => bot?.api.sendMessage(g.chatId, "⚠️ Bot yangilanmoqda, bu o'yin to'xtatildi. Bir daqiqadan keyin /newgame bilan qayta boshlang.")
+    .catch(() => {})));
+  await bot?.stop().catch(() => {});
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

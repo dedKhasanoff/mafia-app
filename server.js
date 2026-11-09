@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { Bot, InlineKeyboard } from 'grammy';
-import { Game, GameError, ROLES } from './game.js';
+import { Game, GameError, ROLES, OPTIONAL_ROLES, DUR } from './game.js';
 import * as subs from './subs.js';
 import * as db from './db.js';
 
@@ -87,8 +87,41 @@ async function offerSubscription(ctx, intro) {
   }
 }
 
-function createGame(chatId) {
+// ---------- Lichkaga xabarlar ----------
+// Foydalanuvchi botga /start bosmagan bo'lsa, Telegram lichkaga yozishga ruxsat bermaydi. Bunday odamlarni eslab qolamiz.
+const dmBlocked = new Set();
+function dm(uid, text, extra = {}) {
+  if (!bot || uid <= 0 || dmBlocked.has(uid)) return;
+  bot.api.sendMessage(uid, text, extra).catch((e) => {
+    if (e.error_code === 403 || e.error_code === 400) dmBlocked.add(uid);
+    else console.error('dm:', e.description || e.message);
+  });
+}
+
+// ---------- Guruh sozlamalari ----------
+const settingsCache = new Map(); // chatId -> settings (baza bo'lmasa ham ishlaydi)
+async function loadSettings(chatId) {
+  const key = String(chatId);
+  if (!settingsCache.has(key)) settingsCache.set(key, (await db.getSettings(chatId).catch(() => null)) || {});
+  return settingsCache.get(key);
+}
+
+function createGame(chatId, settings = {}) {
   const game = new Game(chatId, {
+    settings,
+    onNote: (uid, text) => dm(uid, text),
+    onStart: (g) => {
+      for (const p of g.players.values()) {
+        const r = ROLES[p.role];
+        dm(p.id, `🎭 O'yin boshlandi! Sizning rolingiz: ${r.emoji} ${r.name}\n\n${r.info}`, { reply_markup: openButton(g.chatId) });
+      }
+    },
+    onNightStart: (g) => {
+      for (const p of g.alive) {
+        if (!['don', 'mafia', 'advokat', 'komissar', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'jurnalist', 'qotil'].includes(p.role)) continue;
+        dm(p.id, `🌙 ${g.round}-tun boshlandi. Ilovada harakatingizni qiling!`, { reply_markup: openButton(g.chatId) });
+      }
+    },
     announce: (text, withButton) => {
       if (!bot) return;
       bot.api.sendMessage(chatId, text, withButton ? { reply_markup: openButton(chatId) } : {})
@@ -114,12 +147,73 @@ function createGame(chatId) {
 }
 
 if (BOT_TOKEN) {
-  bot = new Bot(BOT_TOKEN);
+  // TELEGRAM_API_ROOT: boshqa Bot API serveri (masalan, o'z Bot API serveringiz yoki sinov uchun). Odatda kerak emas.
+  bot = new Bot(BOT_TOKEN, process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT } } : {});
   const isGroup = (ctx) => ['group', 'supergroup'].includes(ctx.chat?.type);
 
   bot.command('start', (ctx) => {
     if (ctx.chat.type !== 'private') return;
-    return ctx.reply("Salom! Men Mafia botman 🎭\nMeni guruhga qo'shing va /newgame yozing.");
+    dmBlocked.delete(ctx.from.id); // endi lichkaga yozish mumkin
+    return ctx.reply("Salom! Men Mafia botman 🎭\nMeni guruhga qo'shing va /newgame yozing.\n\n"
+      + "🔔 Endi rolingiz, tungi eslatmalar va shaxsiy xabarlar shu yerga keladi.\n🎁 Kunlik bonus: /bonus");
+  });
+
+  // Kunlik bonus
+  bot.command('bonus', async (ctx) => {
+    if (!db.COINS_ENABLED) return ctx.reply('YM coin hali yoqilmagan.');
+    const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ').slice(0, 40);
+    const coins = await db.claimBonus(ctx.from.id, name).catch(() => undefined);
+    if (coins === undefined) return ctx.reply("Bonusni berib bo'lmadi, keyinroq urinib ko'ring.");
+    if (coins === null) return ctx.reply('🎁 Bugungi bonusni olgansiz. Ertaga yana keling!');
+    pushProfileEverywhere(ctx.from.id);
+    return ctx.reply(`🎁 ${ctx.from.first_name}, +${db.DAILY_BONUS} YM coin! Balans: ${coins} YM`);
+  });
+
+  // Reyting
+  bot.command('top', async (ctx) => {
+    if (!db.COINS_ENABLED) return ctx.reply('Reyting uchun baza ulanmagan.');
+    const inGroup = isGroup(ctx);
+    const rows = await db.top(inGroup ? ctx.chat.id : null).catch(() => null);
+    if (!rows) return ctx.reply("Reytingni o'qib bo'lmadi, keyinroq urinib ko'ring.");
+    if (!rows.length) return ctx.reply("Hali g'oliblar yo'q. Birinchi bo'ling! /newgame");
+    const medal = (i) => ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+    const lines = rows.map((r, i) => `${medal(i)} ${r.name} — ${r.wins} g'alaba`);
+    return ctx.reply(`🏆 ${inGroup ? 'Guruh reytingi' : 'Umumiy reyting'}:\n\n${lines.join('\n')}`);
+  });
+
+  // Guruh sozlamalari: vaqtlar va rollar (faqat adminlar)
+  const isAdmin = async (ctx, chatId) => {
+    const m = await ctx.api.getChatMember(chatId, ctx.from.id).catch(() => null);
+    return m && ['creator', 'administrator'].includes(m.status);
+  };
+  bot.command(['sozlamalar', 'settings'], async (ctx) => {
+    if (!isGroup(ctx)) return ctx.reply('Sozlamalar guruh uchun. Bu buyruqni guruhda yozing.');
+    if (!(await isAdmin(ctx, ctx.chat.id))) return ctx.reply('Sozlamalarni faqat guruh adminlari o\'zgartira oladi.');
+    const st = await loadSettings(ctx.chat.id);
+    return ctx.reply(settingsText(), { reply_markup: settingsKeyboard(st) });
+  });
+  bot.callbackQuery(/^st:(\w+)(?::(\w+))?$/, async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId || !(await isAdmin(ctx, chatId))) return ctx.answerCallbackQuery({ text: 'Faqat adminlar uchun', show_alert: true });
+    const [, key, val] = ctx.match;
+    if (key === 'close') {
+      await ctx.answerCallbackQuery({ text: 'Saqlandi' });
+      return ctx.deleteMessage().catch(() => {});
+    }
+    const st = { ...(await loadSettings(chatId)) };
+    if (key === 'role' && OPTIONAL_ROLES.includes(val)) {
+      const off = new Set(st.off || []);
+      if (off.has(val)) off.delete(val); else off.add(val);
+      st.off = [...off];
+    } else if (TIME_STEPS[key]) {
+      const steps = TIME_STEPS[key];
+      const cur = st[key] || DUR[key];
+      st[key] = steps[(steps.indexOf(cur) + 1) % steps.length] ?? steps[0];
+    } else return ctx.answerCallbackQuery();
+    settingsCache.set(String(chatId), st);
+    await db.saveSettings(chatId, st).catch((e) => console.error('saveSettings:', e.message));
+    await ctx.answerCallbackQuery();
+    return ctx.editMessageReplyMarkup({ reply_markup: settingsKeyboard(st) }).catch(() => {});
   });
 
   bot.command('newgame', async (ctx) => {
@@ -132,9 +226,10 @@ if (BOT_TOKEN) {
       return offerSubscription(ctx, "🔒 Bu guruhda o'yin ochish uchun obuna kerak.");
     }
     if (existing) closeGame(existing);
-    createGame(ctx.chat.id);
+    createGame(ctx.chat.id, await loadSettings(ctx.chat.id));
     return ctx.reply(
-      "🎭 Mafia o'yini ochildi!\nTugmani bosing, ilovada «Qo'shilish»ni tanlang. Birinchi qo'shilgan odam o'yinni boshlaydi.",
+      "🎭 Mafia o'yini ochildi!\nTugmani bosing, ilovada «Qo'shilish»ni tanlang. Birinchi qo'shilgan odam o'yinni boshlaydi.\n\n"
+      + `🔔 Rolingiz va tungi eslatmalar lichkaga kelishi uchun @${botUsername} ga bir marta /start bosing.`,
       { reply_markup: openButton(ctx.chat.id) },
     );
   });
@@ -180,12 +275,30 @@ if (BOT_TOKEN) {
     process.env.SUPPORT_TEXT || "To'lov bo'yicha savollar uchun bot egasiga yozing. Obunani Telegram sozlamalarida (Settings → My Stars) bekor qilish mumkin.",
   ));
 
-  bot.on('pre_checkout_query', (ctx) => (subs.validPayload(ctx.preCheckoutQuery.invoice_payload)
-    ? ctx.answerPreCheckoutQuery(true)
-    : ctx.answerPreCheckoutQuery(false, { error_message: "Noto'g'ri to'lov" })));
+  bot.on('pre_checkout_query', (ctx) => {
+    const q = ctx.preCheckoutQuery;
+    const pack = coinPack(q.invoice_payload);
+    const ok = subs.validPayload(q.invoice_payload) || (pack && db.COINS_ENABLED && q.total_amount === pack.stars);
+    return ok ? ctx.answerPreCheckoutQuery(true) : ctx.answerPreCheckoutQuery(false, { error_message: "Noto'g'ri to'lov" });
+  });
 
   bot.on('message:successful_payment', async (ctx) => {
     const p = ctx.message.successful_payment;
+    const pack = coinPack(p.invoice_payload);
+    if (pack) {
+      // YM coin sotib olish
+      const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ').slice(0, 40);
+      try {
+        const coins = await db.addPurchasedCoins(p.telegram_payment_charge_id, ctx.from.id, name, p.total_amount, pack.coins);
+        if (coins == null) return; // bu to'lov allaqachon hisoblangan
+        console.log(`Coin xaridi: ${ctx.from.id}, ${p.total_amount} Stars -> ${pack.coins} YM`);
+        pushProfileEverywhere(ctx.from.id);
+        return ctx.reply(`✅ Rahmat! +${pack.coins} YM coin. Balans: ${coins} YM`).catch(() => {});
+      } catch (e) {
+        console.error('Coin xaridida xato:', e.message);
+        return ctx.reply("⚠️ To'lov qabul qilindi, lekin coin qo'shishda xato bo'ldi. /paysupport orqali yozing.").catch(() => {});
+      }
+    }
     const expires = p.subscription_expiration_date || Math.floor(Date.now() / 1000) + subs.SUB_PERIOD;
     const chatId = subs.record(p.invoice_payload, expires);
     if (!chatId) return;
@@ -202,6 +315,23 @@ if (BOT_TOKEN) {
     }
   });
 
+  // Guruhda tartib: tunda o'yinchilar yozgan va o'lgan o'yinchilar yozgan xabarlar o'chiriladi
+  bot.on('message', async (ctx) => {
+    if (!isGroup(ctx) || !ctx.from) return;
+    const game = games.get(String(ctx.chat.id));
+    if (!game || ['lobby', 'end'].includes(game.phase)) return;
+    const p = game.players.get(ctx.from.id);
+    if (!p) return; // o'yinda qatnashmayotganlarga tegmaymiz
+    if (ctx.message.text?.startsWith('/')) return;
+    if (p.alive && game.phase !== 'night') return;
+    await ctx.deleteMessage().catch((e) => {
+      if (game.warnedDelete) return;
+      game.warnedDelete = true;
+      console.error('deleteMessage:', e.description || e.message);
+      game.announce("⚠️ Tunda va o'lganlar yozgan xabarlarni o'chirishim uchun meni guruhda admin qiling (xabarlarni o'chirish huquqi bilan).");
+    });
+  });
+
   bot.catch((err) => console.error('Bot xatosi:', err.error?.message || err.message));
 }
 
@@ -215,13 +345,13 @@ async function rewardWinners(game) {
   }
   const winners = players.filter((p) => game.winners.has(p.id));
   try {
-    const balances = await db.award(winners);
+    const balances = await db.award(winners, db.COIN_REWARD, game.chatId);
     for (const w of winners) w.stats = { ...w.stats, [w.role]: (w.stats?.[w.role] || 0) + 1 };
     broadcast(game);
     game.announce(`🪙 G'oliblar ${db.COIN_REWARD} YM coin oldi:\n${winners.map((w) => `${w.name} — jami ${balances.get(w.id)} YM`).join('\n')}`);
     for (const ws of game.clients) {
       if (balances.has(ws.user.id)) {
-        db.getProfile(ws.user.id).then((pr) => send(ws, { type: 'profile', ...pr, shop: db.SHOP, gained: db.COIN_REWARD })).catch(() => {});
+        db.getProfile(ws.user.id).then((pr) => send(ws, { ...profileMsg(pr), gained: db.COIN_REWARD })).catch(() => {});
       }
     }
   } catch (e) {
@@ -229,9 +359,64 @@ async function rewardWinners(game) {
   }
 }
 
+// Coin paketi to'lovi: payload "coins:<paket raqami>"
+function coinPack(payload) {
+  const m = /^coins:(\d+)$/.exec(payload || '');
+  return m ? db.COIN_PACKS.find((p) => p.id === Number(m[1])) || null : null;
+}
+
+async function coinInvoice(ws, packId) {
+  const pack = db.COIN_PACKS.find((p) => p.id === Number(packId));
+  if (!pack || !bot || !db.COINS_ENABLED) return send(ws, { type: 'error', message: "Coin sotib olish hozir mavjud emas" });
+  try {
+    const url = await bot.api.raw.createInvoiceLink({
+      title: `${pack.coins} YM coin`,
+      description: `Mafia o'yini uchun ${pack.coins} YM coin. Do'kondagi buyumlarga sarflash mumkin.`,
+      payload: `coins:${pack.id}`,
+      currency: 'XTR',
+      prices: [{ label: `${pack.coins} YM`, amount: pack.stars }],
+    });
+    send(ws, { type: 'invoice', url });
+  } catch (e) {
+    console.error('coin invoice:', e.description || e.message);
+    send(ws, { type: 'error', message: "To'lov havolasini yaratib bo'lmadi" });
+  }
+}
+
+// Sozlamalar menyusi
+const TIME_STEPS = {
+  night: [30, 45, 60, 90, 120],
+  day: [15, 30, 45, 60, 90, 120],
+  vote: [15, 20, 30, 45, 60],
+  confirm: [15, 20, 30, 45, 60],
+};
+const TIME_LABEL = { night: '🌙 Tun', day: '🗣 Muhokama', vote: '🗳 Ovoz', confirm: '⚖️ Dor oldida' };
+function settingsText() {
+  return "⚙️ Guruh sozlamalari\n\nVaqtni o'zgartirish uchun tugmani bosing (har bosishda keyingi qiymat).\n"
+    + "Rollar: ✅ yoqilgan, ❌ o'chirilgan (o'rniga Tinch aholi beriladi).\n\nO'zgarishlar keyingi /newgame dan ishlaydi.";
+}
+function settingsKeyboard(st) {
+  const kb = new InlineKeyboard();
+  for (const k of Object.keys(TIME_STEPS)) kb.text(`${TIME_LABEL[k]}: ${st[k] || DUR[k]}s`, `st:${k}`).row();
+  const off = new Set(st.off || []);
+  OPTIONAL_ROLES.forEach((r, i) => {
+    kb.text(`${off.has(r) ? '❌' : '✅'} ${ROLES[r].emoji} ${ROLES[r].name}`, `st:role:${r}`);
+    if (i % 2 === 1) kb.row();
+  });
+  return kb.row().text('✔️ Tayyor', 'st:close');
+}
+
+// Foydalanuvchi qaysi o'yinda bo'lmasin, uning oynalariga yangi profilni yuboramiz
+function pushProfileEverywhere(uid) {
+  if (!db.COINS_ENABLED) return;
+  db.getProfile(uid).then((pr) => {
+    for (const g of games.values()) pushProfile(g, uid, pr);
+  }).catch(() => {});
+}
+
 // Profilni (coin, buyumlar) shu foydalanuvchining barcha oynalariga yuboramiz
 function pushProfile(game, uid, profile) {
-  for (const ws of game.clients) if (ws.user.id === uid) send(ws, { type: 'profile', ...profile, shop: db.SHOP });
+  for (const ws of game.clients) if (ws.user.id === uid) send(ws, profileMsg(profile));
 }
 
 // O'yinga qo'shilganda buyumlar va 1-tun hisoblagichini bazadan olamiz
@@ -244,6 +429,19 @@ function loadProfile(game, uid) {
     if (game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; }
     broadcast(game);
   }).catch((e) => console.error('getProfile:', e.message));
+}
+
+async function claimBonusWs(ws) {
+  if (!db.COINS_ENABLED) return;
+  try {
+    const coins = await db.claimBonus(ws.user.id, ws.user.name);
+    if (coins == null) return send(ws, { type: 'error', message: '🎁 Bugungi bonusni olgansiz. Ertaga yana keling!' });
+    pushProfileEverywhere(ws.user.id);
+    send(ws, { type: 'bought', item: `🎁 +${db.DAILY_BONUS} YM bonus` });
+  } catch (e) {
+    console.error('bonus:', e.message);
+    send(ws, { type: 'error', message: "Bonusni berib bo'lmadi" });
+  }
 }
 
 // Do'kon: faqat o'yin davom etmayotganda (lobbida, o'yin tugagach yoki tomosha qilayotganda)
@@ -271,16 +469,20 @@ async function setCommandMenu() {
     { command: 'newgame', description: "Yangi o'yin ochish" },
     { command: 'stopgame', description: "O'yinni to'xtatish (o'yin egasi yoki admin)" },
     { command: 'balans', description: 'YM coin balansi va buyumlar' },
+    { command: 'top', description: 'Guruh reytingi' },
+    { command: 'bonus', description: 'Kunlik bonus' },
     { command: 'obuna', description: 'Guruh obunasi holati' },
     { command: 'paysupport', description: "To'lov bo'yicha yordam" },
   ];
   const priv = [
-    { command: 'start', description: 'Bot haqida' },
+    { command: 'start', description: 'Bot haqida va eslatmalarni yoqish' },
     { command: 'balans', description: 'YM coin balansi va buyumlar' },
+    { command: 'bonus', description: 'Kunlik bonus' },
+    { command: 'top', description: 'Umumiy reyting' },
     { command: 'paysupport', description: "To'lov bo'yicha yordam" },
   ];
   // Adminlar uchun ro'yxat guruhdagi ro'yxat o'rniga chiqadi, shuning uchun hammasini o'z ichiga oladi
-  const admins = [...group, { command: 'groupid', description: 'Guruh ID raqami (sozlash uchun)' }];
+  const admins = [...group, { command: 'sozlamalar', description: "Vaqtlar va rollarni sozlash" }, { command: 'groupid', description: 'Guruh ID raqami (sozlash uchun)' }];
   await bot.api.setMyCommands(group, { scope: { type: 'all_group_chats' } });
   await bot.api.setMyCommands(admins, { scope: { type: 'all_chat_administrators' } });
   await bot.api.setMyCommands(priv, { scope: { type: 'all_private_chats' } });
@@ -310,6 +512,9 @@ app.get('/health', (_req, res) => res.json({ ok: true, games: games.size }));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 512 * 1024 });
 
+const profileMsg = (pr) => ({
+  type: 'profile', ...pr, shop: db.SHOP, packs: bot ? db.COIN_PACKS : [], bonus: db.DAILY_BONUS,
+});
 const send = (ws, msg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
 
 function broadcast(game) {
@@ -362,7 +567,7 @@ function handle(ws, msg) {
     ws.game = game;
     game.clients.add(ws);
     if (db.COINS_ENABLED) {
-      db.getProfile(user.id).then((pr) => send(ws, { type: 'profile', ...pr, shop: db.SHOP })).catch(() => {});
+      db.getProfile(user.id).then((pr) => send(ws, profileMsg(pr))).catch(() => {});
     }
     return broadcast(game); // tomoshabinlar soni yangilansin
   }
@@ -376,6 +581,10 @@ function handle(ws, msg) {
     case 'addBot': return game.addBot(user.id);
     case 'start': return game.start(user.id);
     case 'voice': return relayVoice(ws, msg);
+    case 'mchat': return game.mafiaSay(user.id, msg.text);
+    case 'lastwords': return game.sayLastWords(user.id, msg.text);
+    case 'buyCoins': return void coinInvoice(ws, msg.pack);
+    case 'bonus': return void claimBonusWs(ws);
     case 'act': {
       const targets = Array.isArray(msg.targets) ? msg.targets.slice(0, 2) : [msg.target];
       return game.act(user.id, targets, msg.mode);

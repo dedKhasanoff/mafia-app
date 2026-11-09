@@ -2,7 +2,7 @@
 
 export const MIN_PLAYERS = Number(process.env.MIN_PLAYERS || 4);
 export const MAX_PLAYERS = 20;
-const DUR = {
+export const DUR = {
   night: Number(process.env.NIGHT_SEC || 60),
   day: Number(process.env.DAY_SEC || 30),
   vote: Number(process.env.VOTE_SEC || 30),
@@ -59,6 +59,9 @@ const ROLE_ORDER = [
 ];
 
 const MAFIA_TEAM = new Set(['don', 'mafia', 'advokat']);
+// Guruh admini /sozlamalar orqali o'chira oladigan rollar (o'chirilgani o'rniga Tinch aholi beriladi)
+export const OPTIONAL_ROLES = ['mashuqa', 'qotil', 'advokat', 'serjant', 'qoriqchi', 'omadli', 'suidsid', 'jurnalist', 'daydi', 'kamikadze', 'mer'];
+const CHAT_MAX = 200; // Mafia chati va so'nggi so'z uzunligi
 const SHOOTERS = new Set(['don', 'mafia']);
 const NIGHT_ROLES = new Set(['don', 'mafia', 'advokat', 'komissar', 'doktor', 'qoriqchi', 'mashuqa', 'daydi', 'jurnalist', 'qotil']);
 const KOM_TEAM = new Set(['komissar', 'serjant']);
@@ -82,13 +85,25 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 export class GameError extends Error {}
 
 export class Game {
-  constructor(chatId, { announce = () => {}, onChange = () => {}, onEnd = () => {}, onItemUsed = () => {}, onFirstNight = () => {} } = {}) {
+  constructor(chatId, {
+    announce = () => {}, onChange = () => {}, onEnd = () => {}, onItemUsed = () => {}, onFirstNight = () => {},
+    onNote = () => {}, onStart = () => {}, onNightStart = () => {}, settings = {},
+  } = {}) {
     this.chatId = chatId;
     this.announce = announce;   // guruhga xabar: (text, withButton) => void
     this.onChange = onChange;   // holat o'zgarganda chaqiriladi
     this.onEnd = onEnd;         // o'yin g'olib bilan tugaganda (mukofot uchun)
     this.onItemUsed = onItemUsed;     // do'kon buyumi ishlatilganda: (uid, item)
     this.onFirstNight = onFirstNight; // 1-tun tugaganda: (game, deaths)
+    this.onNote = onNote;             // shaxsiy xabar: (uid, text) — bot lichkaga ham yuboradi
+    this.onStart = onStart;           // rollar tarqatilganda: (game)
+    this.onNightStart = onNightStart; // tun boshlanganda: (game)
+    // Guruh sozlamalari: vaqtlar (soniya) va o'chirilgan rollar
+    this.dur = { ...DUR };
+    for (const k of ['night', 'day', 'vote', 'confirm']) if (settings[k] > 0) this.dur[k] = Number(settings[k]);
+    this.offRoles = new Set((settings.off || []).filter((r) => OPTIONAL_ROLES.includes(r)));
+    this.mafiaChat = [];          // [{from, name, text, round}]
+    this.lastWords = new Set();   // tunda o'ldirilganlar: kunduzi so'nggi so'z qoldira oladi
     this.players = new Map();   // id -> {id, name, photo, alive, role}
     this.hostId = null;
     this.phase = 'lobby';       // lobby | night | day | vote | kamikaze | end
@@ -144,6 +159,35 @@ export class Game {
   note(uid, text) {
     if (!this.notes.has(uid)) this.notes.set(uid, []);
     this.notes.get(uid).push({ round: this.round, text });
+    if (uid > 0) this.onNote(uid, text); // botlarga (manfiy id) yuborilmaydi
+  }
+
+  // Mafia jamoasining tungi chati (faqat Don, Mafia va Advokat ko'radi)
+  mafiaSay(uid, text) {
+    const p = this.players.get(uid);
+    if (this.phase !== 'night') throw new GameError('Mafia chati faqat tunda ishlaydi');
+    if (!p?.alive || !MAFIA_TEAM.has(p.role)) throw new GameError("Siz Mafia chatiga yoza olmaysiz");
+    text = String(text || '').trim().slice(0, CHAT_MAX);
+    if (!text) return;
+    if (Date.now() - (p.lastChat || 0) < 700) throw new GameError('Biroz sekinroq yozing');
+    p.lastChat = Date.now();
+    this.mafiaChat.push({ from: uid, name: p.name, text, round: this.round });
+    if (this.mafiaChat.length > 60) this.mafiaChat.shift();
+    this.onChange();
+  }
+
+  // Tunda o'ldirilgan o'yinchining so'nggi so'zi (kunduzi, bir marta)
+  sayLastWords(uid, text) {
+    if (!['day', 'vote', 'confirm'].includes(this.phase) || !this.lastWords.has(uid)) {
+      throw new GameError("Hozir so'nggi so'z qoldira olmaysiz");
+    }
+    text = String(text || '').trim().slice(0, CHAT_MAX);
+    if (!text) return;
+    this.lastWords.delete(uid);
+    const msg = `🕯 ${this.players.get(uid).name}ning so'nggi so'zi: «${text}»`;
+    this.addLog(msg, false);
+    this.announce(msg);
+    this.onChange();
   }
 
   schedule(sec, fn) {
@@ -231,6 +275,7 @@ export class Game {
     this.pending = [];
     this.addLog("🎲 O'yin boshlandi! Rollar tarqatildi");
     this.announce(`🎲 O'yin boshlandi! ${this.players.size} o'yinchi, rollar:\n${summary}`, true);
+    this.onStart(this);
     this.startNight();
   }
 
@@ -240,7 +285,8 @@ export class Game {
       const j = Math.floor(Math.random() * (i + 1));
       [ids[i], ids[j]] = [ids[j], ids[i]];
     }
-    const roles = ROLE_ORDER.slice(0, ids.length);
+    // O'chirilgan rollar o'rniga Tinch aholi
+    const roles = ROLE_ORDER.slice(0, ids.length).map((r) => (this.offRoles.has(r) ? 'civil' : r));
     ids.forEach((id, i) => { this.players.get(id).role = roles[i]; });
   }
 
@@ -251,10 +297,12 @@ export class Game {
     this.beginPhase('night');
     this.actions.clear();
     this.dayBlocked = null;
+    this.lastWords.clear(); // so'nggi so'z faqat o'sha kuni
     this.addLog(`🌙 ${this.round}-tun boshlandi`, false);
     this.announce(`🌙 ${this.round}-tun. Shahar uxlaydi...`);
-    this.schedule(DUR.night, () => this.resolveNight());
+    this.schedule(this.dur.night, () => this.resolveNight());
     this.botsPlay();
+    this.onNightStart(this);
     this.onChange();
   }
 
@@ -434,6 +482,10 @@ export class Game {
     for (const [uid, why] of deaths) {
       const p = P(uid);
       p.alive = false;
+      if (uid > 0) {
+        this.lastWords.add(uid);
+        this.note(uid, "🕯 Kunduzi ilovada so'nggi so'zingizni qoldirishingiz mumkin.");
+      }
       const by = killers(killedBy.get(uid) || []);
       if (why === 'blast') {
         lines.push(`💣 ${P(blastBy.get(uid)).name} Kamikadze edi: portlab, o'zi bilan uni otgan ${p.name}ni olib ketdi. ${p.name} ${label(p.role)} edi.`);
@@ -493,7 +545,7 @@ export class Game {
   startDay() {
     this.beginPhase('day');
     this.addLog('🗣 Muhokama vaqti', false);
-    this.schedule(DUR.day, () => this.startVote());
+    this.schedule(this.dur.day, () => this.startVote());
     this.onChange();
   }
 
@@ -503,7 +555,7 @@ export class Game {
     this.votes.clear();
     this.addLog('🗳 Ovoz berish boshlandi', false);
     this.announce('🗳 Ovoz berish boshlandi! Ilovada kimni osishni tanlang.', true);
-    this.schedule(DUR.vote, () => this.resolveVote());
+    this.schedule(this.dur.vote, () => this.resolveVote());
     this.botsPlay();
     this.onChange();
   }
@@ -563,7 +615,7 @@ export class Game {
     this.addLog(msg);
     this.beginPhase('confirm');
     this.announce(msg, true);
-    this.schedule(DUR.confirm, () => this.resolveConfirm());
+    this.schedule(this.dur.confirm, () => this.resolveConfirm());
     this.botsPlay();
     this.onChange();
   }
@@ -616,7 +668,7 @@ export class Game {
       this.addLog(msg);
       this.beginPhase('kamikaze');
       this.announce(msg, true);
-      this.schedule(DUR.kamikaze, () => this.resolveKamikaze(null));
+      this.schedule(this.dur.kamikaze, () => this.resolveKamikaze(null));
       this.botsPlay();
       return this.onChange();
     } else {
@@ -811,6 +863,8 @@ export class Game {
         choice,
         canAct,
         canSpeak: this.canSpeak(uid),
+        canLastWords: this.lastWords.has(uid) && ['day', 'vote', 'confirm'].includes(this.phase),
+        canMafiaChat: this.phase === 'night' && !!me?.alive && MAFIA_TEAM.has(myRole),
       },
       players: [...this.players.values()].map((p) => ({
         id: p.id,
@@ -830,6 +884,7 @@ export class Game {
           .map(([from, a]) => ({ from, target: a.targets[0], don: this.players.get(from).role === 'don' }))
         : [],
       checks: KOM_TEAM.has(myRole) ? this.checks : [],
+      mafiaChat: MAFIA_TEAM.has(myRole) ? this.mafiaChat.slice(-30) : [],
       canReveal: myRole === 'komissar' && !!me?.alive && !ended && this.phase !== 'lobby',
       notes: (this.notes.get(uid) || []).slice(-20),
       log: this.log.slice(-25),

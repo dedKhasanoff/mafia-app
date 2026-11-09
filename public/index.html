@@ -117,6 +117,23 @@
   .stats span { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
   .stats span.best { border-color: var(--gold); color: var(--gold); font-weight: 700; }
   .sheet h3 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .hdr-right { display: flex; gap: 8px; align-items: center; }
+  .mute { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 12px; width: 40px; height: 40px; font-size: 18px; cursor: pointer; }
+  .chatlist { list-style: none; margin: 0 0 8px; padding: 0; max-height: 200px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  .chatlist li { font-size: 13px; background: var(--card); border-radius: 10px; padding: 6px 10px; }
+  .chatlist li b { color: var(--danger); margin-right: 4px; }
+  .chatlist li.mine { background: color-mix(in srgb, var(--danger) 18%, var(--card)); }
+  .chatrow { display: flex; gap: 8px; }
+  .chatrow input, .chatrow textarea {
+    flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    border-radius: 12px; padding: 10px 12px; font: inherit; resize: none;
+  }
+  .chatrow button { flex: none; }
+  #mchat { border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+  #lastw { border-color: var(--gold); }
+  .packs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .packs button { flex: 1 1 30%; }
+  .bonusbtn { width: 100%; margin: 6px 0 4px; }
   .group-title {
     grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px;
     font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
@@ -290,7 +307,7 @@
 <div id="app">
   <header>
     <div><div id="phase">Mafia</div><div id="sub"></div></div>
-    <div id="timer"></div>
+    <div class="hdr-right"><button id="mute" class="mute" aria-label="Ovoz">🔊</button><div id="timer"></div></div>
   </header>
   <div id="winner"></div>
   <div id="rolecard" class="rolecard" hidden>
@@ -302,6 +319,15 @@
   <div id="modes" class="modes"></div>
   <div id="grid"></div>
   <div id="actions"></div>
+  <div id="lastw" class="panel" hidden>
+    <h3>🕯 So'nggi so'zingiz</h3>
+    <div class="chatrow"><textarea id="lastwText" rows="2" maxlength="200" placeholder="Shaharga oxirgi gapingiz…"></textarea><button class="btn small" id="lastwSend">Yuborish</button></div>
+  </div>
+  <div id="mchat" class="panel" hidden>
+    <h3>🤵🏻 Mafia chati (faqat jamoangiz ko'radi)</h3>
+    <ul id="mchatList" class="chatlist"></ul>
+    <div class="chatrow" id="mchatRow"><input id="mchatText" maxlength="200" placeholder="Kimni otamiz?" autocomplete="off"><button class="btn small" id="mchatSend">➤</button></div>
+  </div>
   <div id="notes" class="panel" hidden><h3>📨 Shaxsiy xabarlar</h3><ul id="noteList" class="list"></ul></div>
   <div id="checks" class="panel" hidden><h3>🕵️ Tekshiruvlar</h3><div id="checkList"></div></div>
   <div class="panel"><h3>Voqealar</h3><ul id="log" class="list"></ul></div>
@@ -322,6 +348,7 @@ const $ = (id) => document.getElementById(id);
 let state = null, endAt = null, ws = null, retry = 0, fatal = false;
 let myCoins = null;      // YM coin balansi (baza ulangan bo'lsa)
 let myItems = {}, shopList = null, myStats = {};
+let myBonusTaken = true, coinPacks = [], bonusAmount = 0;
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
@@ -375,6 +402,10 @@ function showScene(s) {
     if (s.winner && s.winner !== 'draw') confetti(s.winner);
   } else return render();
 
+  // Bosqich tovushi; tunda kimdir o'lgan bo'lsa, o'q ovozi
+  const snd = { night: 'night', day: 'day', vote: 'vote', confirm: 'drum', kamikaze: 'boom', end: s.winner ? 'win' : null }[s.phase];
+  if (snd) play(snd);
+  if (s.phase === 'day' && (s.events || []).some((t) => t.startsWith('💀') || t.startsWith('💣'))) setTimeout(() => play('shot'), 900);
   sc.className = cls;
   $('sceneIcon').textContent = icon;
   $('sceneTitle').textContent = title;
@@ -468,10 +499,17 @@ function connect() {
       myCoins = m.coins;
       myItems = m.items || {};
       myStats = m.stats || {};
+      myBonusTaken = !!m.bonusTaken;
+      coinPacks = m.packs || coinPacks;
+      bonusAmount = m.bonus || bonusAmount;
       shopList = m.shop || shopList;
       if (m.gained) toast(`🪙 +${m.gained} YM coin! Balans: ${m.coins}`, true);
       if (state) render();
       renderShop();
+    } else if (m.type === 'invoice') {
+      // Telegram'ning o'z to'lov oynasi
+      if (tg?.openInvoice) tg.openInvoice(m.url, (status) => { if (status === 'paid') toast('⭐ To\'lov qabul qilindi!', true); });
+      else window.open(m.url, '_blank');
     } else if (m.type === 'bought') {
       toast(`✅ Sotib olindi: ${m.item}`, true);
     } else if (m.type === 'voice') {
@@ -734,6 +772,22 @@ function render() {
   }
   if (s.phase === 'end') button('Yopish', () => tg?.close(), true);
 
+  // So'nggi so'z (tunda o'ldirilganlar uchun, kunduzi bir marta)
+  $('lastw').hidden = !me.canLastWords;
+
+  // Mafia chati
+  const chat = s.mafiaChat || [];
+  $('mchat').hidden = !chat.length && !me.canMafiaChat;
+  $('mchatRow').hidden = !me.canMafiaChat;
+  const ml = $('mchatList');
+  const atBottom = ml.scrollTop + ml.clientHeight >= ml.scrollHeight - 10;
+  ml.replaceChildren(...chat.map((c) => {
+    const li = el('li', c.from === me.id ? 'mine' : '');
+    li.append(el('b', '', `${c.name}:`), document.createTextNode(c.text));
+    return li;
+  }));
+  if (atBottom) ml.scrollTop = ml.scrollHeight;
+
   // Shaxsiy xabarlar
   $('notes').hidden = !s.notes.length;
   const nl = $('noteList'); nl.replaceChildren();
@@ -905,6 +959,71 @@ function tickTimer() {
 }
 setInterval(tickTimer, 250);
 
+// ---------- Mafia chati va so'nggi so'z ----------
+function sendChat() {
+  const inp = $('mchatText');
+  const text = inp.value.trim();
+  if (!text) return;
+  sendMsg({ type: 'mchat', text });
+  inp.value = '';
+}
+$('mchatSend').onclick = sendChat;
+$('mchatText').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+$('lastwSend').onclick = () => {
+  const text = $('lastwText').value.trim();
+  if (!text) return toast("So'nggi so'zingizni yozing");
+  sendMsg({ type: 'lastwords', text });
+  $('lastwText').value = '';
+};
+
+// ---------- Tovushlar (fayl kerak emas: brauzerning o'zida yasaladi) ----------
+let muted = false;
+try { muted = localStorage.getItem('mafia-muted') === '1'; } catch {}
+const setMuteIcon = () => { $('mute').textContent = muted ? '🔇' : '🔊'; };
+setMuteIcon();
+$('mute').onclick = () => {
+  muted = !muted;
+  try { localStorage.setItem('mafia-muted', muted ? '1' : '0'); } catch {}
+  setMuteIcon();
+};
+
+function tone(freq, start, dur, type = 'sine', vol = 0.18, endFreq) {
+  const ctx = audioCtx; if (!ctx) return;
+  const t = ctx.currentTime + start;
+  const o = ctx.createOscillator(); const g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(t); o.stop(t + dur + 0.05);
+}
+function noise(start, dur, vol = 0.5) {
+  const ctx = audioCtx; if (!ctx) return;
+  const len = Math.floor(ctx.sampleRate * dur);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  const src = ctx.createBufferSource(); const g = ctx.createGain();
+  src.buffer = buf; g.gain.value = vol;
+  src.connect(g); g.connect(ctx.destination);
+  src.start(ctx.currentTime + start);
+}
+const SOUNDS = {
+  night: () => { tone(220, 0, 1.2, 'sine', 0.12); tone(165, 0.5, 1.6, 'sine', 0.1); },
+  day: () => { [523, 659, 784].forEach((f, i) => tone(f, i * 0.15, 0.6, 'triangle', 0.14)); },
+  shot: () => { noise(0, 0.35, 0.6); tone(120, 0, 0.3, 'square', 0.08, 40); },
+  vote: () => { tone(880, 0, 0.8, 'sine', 0.12); tone(1320, 0, 0.6, 'sine', 0.05); },
+  drum: () => { for (let i = 0; i < 8; i++) tone(90, i * 0.09, 0.12, 'triangle', 0.16, 60); },
+  win: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.12, 0.5, 'square', 0.07)); },
+  boom: () => { noise(0, 0.9, 0.8); tone(80, 0, 0.8, 'sine', 0.3, 30); },
+};
+function play(name) {
+  if (muted || !audioCtx) return;
+  try { SOUNDS[name]?.(); } catch {}
+}
+
 // ---------- Do'kon ----------
 function openShop() {
   tg?.HapticFeedback?.impactOccurred('light');
@@ -919,6 +1038,13 @@ function renderShop() {
   const h = el('h2', '', '👤 Profil');
   h.append(el('span', 'bal', `🪙 ${myCoins ?? 0} YM`));
   sh.append(h);
+  // Kunlik bonus
+  if (bonusAmount) {
+    const bb = el('button', `btn bonusbtn${myBonusTaken ? ' ghost' : ''}`, myBonusTaken ? '✅ Bugungi bonus olindi — ertaga yana' : `🎁 Kunlik bonus: +${bonusAmount} YM`);
+    bb.disabled = myBonusTaken;
+    bb.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'bonus' }); };
+    sh.append(bb);
+  }
   // G'alabalar: rollar bo'yicha, ko'pidan kamiga
   sh.append(el('h3', '', "🏆 G'alabalarim"));
   const st = el('div', 'stats');
@@ -938,6 +1064,17 @@ function renderShop() {
     b.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'buy', item: key }); };
     row.append(t, b);
     sh.append(row);
+  }
+  // YM coin sotib olish (Telegram Stars)
+  if (coinPacks.length) {
+    sh.append(el('h3', '', '⭐ YM coin sotib olish'));
+    const pk = el('div', 'packs');
+    for (const pack of coinPacks) {
+      const b = el('button', 'btn small', `${pack.coins} YM · ${pack.stars}⭐`);
+      b.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'buyCoins', pack: pack.id }); };
+      pk.append(b);
+    }
+    sh.append(pk);
   }
   const close = el('button', 'btn ghost', 'Yopish');
   close.style.width = '100%'; close.style.marginTop = '10px';

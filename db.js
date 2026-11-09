@@ -10,6 +10,17 @@ export const SHOP = {
   escape: { name: '🎟 Osilishdan qutulish', price: 150, info: "Kunduzi osishga qaror qilinsa, omon qolasiz. Bir marta ishlaydi." },
 };
 const ITEMS = Object.keys(SHOP);
+
+// Kunlik bonus (YM)
+export const DAILY_BONUS = Number(process.env.DAILY_BONUS || 10);
+// YM coin paketlari Telegram Stars'ga: COIN_PACKS="50:100,100:250,250:700" (stars:coin)
+export const COIN_PACKS = (process.env.COIN_PACKS || '50:100,100:250,250:700').split(',')
+  .map((x) => x.split(':').map(Number))
+  .filter(([stars, coins]) => stars > 0 && coins > 0)
+  .map(([stars, coins], i) => ({ id: i, stars, coins }));
+// Kunlik bonus sanasi Toshkent vaqti bilan
+const TODAY = "(now() AT TIME ZONE 'Asia/Tashkent')::date";
+const BONUS_TAKEN = `(last_bonus IS NOT DISTINCT FROM ${TODAY}) AS bonus_taken`;
 const DB_URL = process.env.DATABASE_URL;
 export const COINS_ENABLED = !!DB_URL;
 
@@ -34,6 +45,31 @@ export async function init() {
       ADD COLUMN IF NOT EXISTS fake_doc INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS escape INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS first_night_streak INTEGER NOT NULL DEFAULT 0`);
+  await pool.query('ALTER TABLE players ADD COLUMN IF NOT EXISTS last_bonus DATE');
+  // Guruh bo'yicha g'alabalar (/top uchun)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_wins (
+      chat_id BIGINT NOT NULL,
+      player_id BIGINT NOT NULL,
+      name TEXT NOT NULL,
+      wins INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (chat_id, player_id)
+    )`);
+  // Stars to'lovlari: bir to'lov ikki marta hisoblanmasligi uchun
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      charge_id TEXT PRIMARY KEY,
+      player_id BIGINT NOT NULL,
+      stars INTEGER NOT NULL,
+      coins INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  // Guruh sozlamalari (/sozlamalar)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS group_settings (
+      chat_id BIGINT PRIMARY KEY,
+      settings JSONB NOT NULL DEFAULT '{}'
+    )`);
   // Har bir rolda nechta g'alaba
   await pool.query(`
     CREATE TABLE IF NOT EXISTS role_wins (
@@ -47,6 +83,7 @@ export async function init() {
 const toProfile = (row, stats = {}) => ({
   stats, // { rol: g'alabalar soni }
   coins: row?.coins ?? 0,
+  bonusTaken: !!row?.bonus_taken, // bugungi bonus olinganmi
   items: Object.fromEntries(ITEMS.map((k) => [k, row?.[k] ?? 0])),
   streak: row?.first_night_streak ?? 0,
 });
@@ -55,7 +92,7 @@ const toProfile = (row, stats = {}) => ({
 export async function getProfile(id) {
   if (!pool) return null;
   const [{ rows }, wins] = await Promise.all([
-    pool.query('SELECT * FROM players WHERE id = $1', [id]),
+    pool.query(`SELECT *, ${BONUS_TAKEN} FROM players WHERE id = $1`, [id]),
     pool.query('SELECT role, wins FROM role_wins WHERE player_id = $1', [id]),
   ]);
   return toProfile(rows[0], Object.fromEntries(wins.rows.map((r) => [r.role, r.wins])));
@@ -70,7 +107,7 @@ export async function buy(id, item) {
   const { price } = SHOP[item];
   const { rows } = await pool.query(
     `UPDATE players SET coins = coins - $2, ${item} = ${item} + 1, updated_at = now()
-     WHERE id = $1 AND coins >= $2 RETURNING *`,
+     WHERE id = $1 AND coins >= $2 RETURNING *, ${BONUS_TAKEN}`,
     [id, price],
   );
   if (!rows.length) throw new ShopError(`YM coin yetmaydi: ${price} YM kerak`);
@@ -80,7 +117,7 @@ export async function buy(id, item) {
 export async function useItem(id, item) {
   if (!pool || !ITEMS.includes(item)) return null;
   const { rows } = await pool.query(
-    `UPDATE players SET ${item} = GREATEST(${item} - 1, 0), updated_at = now() WHERE id = $1 RETURNING *`,
+    `UPDATE players SET ${item} = GREATEST(${item} - 1, 0), updated_at = now() WHERE id = $1 RETURNING *, ${BONUS_TAKEN}`,
     [id],
   );
   return rows[0] ? toProfile(rows[0]) : null;
@@ -105,7 +142,7 @@ export async function getCoins(id) {
 }
 
 // G'oliblarga mukofot. Qaytaradi: Map(id -> yangi balans)
-export async function award(winners, amount = COIN_REWARD) {
+export async function award(winners, amount = COIN_REWARD, chatId = null) {
   const result = new Map();
   if (!pool || !winners.length) return result;
   const client = await pool.connect();
@@ -119,6 +156,13 @@ export async function award(winners, amount = COIN_REWARD) {
         [w.id, w.name, amount],
       );
       result.set(w.id, rows[0].coins);
+      if (chatId != null && /^-?\d+$/.test(String(chatId))) {
+        await client.query(
+          `INSERT INTO group_wins (chat_id, player_id, name, wins) VALUES ($1, $2, $3, 1)
+           ON CONFLICT (chat_id, player_id) DO UPDATE SET wins = group_wins.wins + 1, name = $3`,
+          [chatId, w.id, w.name],
+        );
+      }
       if (w.role) {
         await client.query(
           `INSERT INTO role_wins (player_id, role, wins) VALUES ($1, $2, 1)
@@ -135,4 +179,67 @@ export async function award(winners, amount = COIN_REWARD) {
     client.release();
   }
   return result;
+}
+
+// Kunlik bonus: kuniga bir marta. Qaytaradi: yangi balans yoki null (bugun olingan)
+export async function claimBonus(id, name) {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO players (id, name, coins, last_bonus) VALUES ($1, $2, $3, ${TODAY})
+     ON CONFLICT (id) DO UPDATE SET coins = players.coins + $3, last_bonus = ${TODAY}, name = $2, updated_at = now()
+     WHERE players.last_bonus IS DISTINCT FROM ${TODAY}
+     RETURNING coins`,
+    [id, name, DAILY_BONUS],
+  );
+  return rows[0]?.coins ?? null;
+}
+
+// Stars bilan coin sotib olish. Bir xil to'lov (charge_id) qayta kelsa, ikkinchi marta qo'shilmaydi.
+// Qaytaradi: yangi balans yoki null (allaqachon hisoblangan)
+export async function addPurchasedCoins(chargeId, id, name, stars, coins) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ins = await client.query(
+      'INSERT INTO payments (charge_id, player_id, stars, coins) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING charge_id',
+      [chargeId, id, stars, coins],
+    );
+    if (!ins.rows.length) { await client.query('ROLLBACK'); return null; }
+    const { rows } = await client.query(
+      `INSERT INTO players (id, name, coins) VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET coins = players.coins + $3, name = $2, updated_at = now() RETURNING coins`,
+      [id, name, coins],
+    );
+    await client.query('COMMIT');
+    return rows[0].coins;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Reyting: guruhda yoki (chatId bo'lmasa) umumiy
+export async function top(chatId = null, limit = 10) {
+  if (!pool) return [];
+  const { rows } = chatId != null
+    ? await pool.query('SELECT name, wins FROM group_wins WHERE chat_id = $1 AND wins > 0 ORDER BY wins DESC, name LIMIT $2', [chatId, limit])
+    : await pool.query('SELECT name, wins, coins FROM players WHERE wins > 0 ORDER BY wins DESC, coins DESC LIMIT $1', [limit]);
+  return rows;
+}
+
+export async function getSettings(chatId) {
+  if (!pool) return null;
+  const { rows } = await pool.query('SELECT settings FROM group_settings WHERE chat_id = $1', [chatId]);
+  return rows[0]?.settings || null;
+}
+
+export async function saveSettings(chatId, settings) {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO group_settings (chat_id, settings) VALUES ($1, $2)
+     ON CONFLICT (chat_id) DO UPDATE SET settings = $2`,
+    [chatId, JSON.stringify(settings)],
+  );
 }

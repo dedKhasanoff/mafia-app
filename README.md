@@ -114,6 +114,20 @@ Coin'lar saqlanishi uchun bepul Postgres kerak, masalan **Neon**:
 
 `DATABASE_URL` bo'lmasa, o'yin coin'siz ishlayveradi.
 
+## 🦸 Shaxsiy geroy
+
+Har bir o'yinchining o'z geroyi bor (`/geroy` botda yoki ilovada profil ustiga bosib).
+
+- **Daraja** ball bilan oshadi: 2-daraja 1100, 3-daraja 3000, keyin 6000, 10000 ... (10 darajagacha).
+  Har darajada kuch +10 (1-darajada 40–46) va maksimal himoya +20 (1-darajada 30).
+- **Ball:** o'yin uchun +50, g'alaba uchun +100, do'konda sarflangan har 1 YM uchun +1, Stars bilan coin olganda har 1⭐ uchun +10.
+- **Tunda** zaryadi bor o'yinchi rolidan qat'i nazar geroyi bilan bitta odamga hujum qiladi (1 zaryad).
+  Kuch nishonning geroy himoyasidan katta bo'lsa, hujum o'tadi va odam o'ladi. Doktor, Qo'riqchi va Himoya buyumi bu hujumdan ham qutqaradi.
+  Kichik bo'lsa, himoya kamayadi va nishon omon qoladi. Ma'shuqa band qilsa, hujum bo'lmaydi.
+- Tun zaryadi bor geroy egalari qaror qilmaguncha (hujum yoki «Hujumsiz») erta tugamaydi.
+- **Xaridlar (YM):** +1000 ball — 1000, himoyani to'ldirish (7 kun) — 300, zaryad +3 — 400, nomni o'zgartirish — 2000 (`/geroy_nom Yangi nom`).
+  Yangi geroyda zaryad yo'q. O'yin davomida sotib olib bo'lmaydi.
+
 ## ⭐ Guruh obunasi
 
 `/newgame` faqat obunasi faol guruhda ishlaydi. Obuna bo'lmasa, bot «⭐ Obuna bo'lish» tugmasini yuboradi:

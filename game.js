@@ -1,3 +1,5 @@
+import { rollPower } from './hero.js';
+
 // O'yin mantiqi: rollar, fazalar, ovozlar. Telegram yoki WebSocket haqida hech narsa bilmaydi.
 
 export const MIN_PLAYERS = Number(process.env.MIN_PLAYERS || 4);
@@ -72,7 +74,7 @@ const FIRST_NIGHT_STREAK = 2;
 // Tungi roli bor o'yinchi shuncha tun ketma-ket harakat qilmasa, o'yindan chiqariladi
 const IDLE_NIGHTS = Number(process.env.IDLE_NIGHTS || 2);
 // Kim o'ldirgani (hujum turi bo'yicha)
-const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar', kamikadze: '💣 Kamikadze' };
+const KILLER = { mafia: '🤵🏻 Mafia', qotil: '🔪 Qotil', komissar: '🕵️ Komissar', kamikadze: '💣 Kamikadze', hero: '🦸 Geroy' };
 const killers = (kinds) => [...new Set(kinds)].map((k) => KILLER[k]).join(' va ');
 // Eng ko'p g'alaba qozongan rol: { role, wins } yoki null
 const topRole = (stats) => {
@@ -88,6 +90,7 @@ export class Game {
   constructor(chatId, {
     announce = () => {}, onChange = () => {}, onEnd = () => {}, onItemUsed = () => {}, onFirstNight = () => {},
     onNote = () => {}, onStart = () => {}, onNightStart = () => {}, settings = {},
+    onHeroCharge = () => {}, onHeroDefense = () => {},
   } = {}) {
     this.chatId = chatId;
     this.announce = announce;   // guruhga xabar: (text, withButton) => void
@@ -98,6 +101,10 @@ export class Game {
     this.onNote = onNote;             // shaxsiy xabar: (uid, text) — bot lichkaga ham yuboradi
     this.onStart = onStart;           // rollar tarqatilganda: (game)
     this.onNightStart = onNightStart; // tun boshlanganda: (game)
+    this.onHeroCharge = onHeroCharge;   // geroy zaryadi sarflandi: (uid)
+    this.onHeroDefense = onHeroDefense; // geroy himoyasi o'zgardi: (uid, qolgan himoya)
+    this.heroAttacks = new Map(); // tunda: hujumchi uid -> nishon uid
+    this.heroSkips = new Set();   // tunda geroyini ishlatmaslikni tanlaganlar
     // Guruh sozlamalari: vaqtlar (soniya) va o'chirilgan rollar
     this.dur = { ...DUR };
     for (const k of ['night', 'day', 'vote', 'confirm']) if (settings[k] > 0) this.dur[k] = Number(settings[k]);
@@ -297,6 +304,8 @@ export class Game {
     this.round++;
     this.beginPhase('night');
     this.actions.clear();
+    this.heroAttacks.clear();
+    this.heroSkips.clear();
     this.dayBlocked = null;
     this.lastWords.clear(); // so'nggi so'z faqat o'sha kuni
     this.addLog(`🌙 ${this.round}-tun boshlandi`, false);
@@ -304,6 +313,38 @@ export class Game {
     this.schedule(this.dur.night, () => this.resolveNight());
     this.botsPlay();
     this.onNightStart(this);
+    this.onChange();
+  }
+
+  // Zaryadi bor, bu tun hali qaror qilmagan geroy egasi
+  heroPending(p) {
+    return p.alive && p.hero?.charges > 0 && !this.heroAttacks.has(p.id) && !this.heroSkips.has(p.id);
+  }
+
+  // Tun erta tugaydi: hamma tungi rollar harakat qilgan va geroy egalari qaror qilgan
+  nightDone() {
+    return this.alive.every((x) => (!NIGHT_ROLES.has(x.role) || this.actions.has(x.id)) && !this.heroPending(x));
+  }
+
+  // Shaxsiy geroy bilan tungi hujum (rolidan qat'i nazar, zaryad bo'lsa)
+  heroAttack(id, targetId) {
+    const p = this.players.get(id);
+    if (this.phase !== 'night') throw new GameError('Geroy faqat tunda hujum qiladi');
+    if (!p?.alive || !p.hero) throw new GameError("Sizda geroy yo'q");
+    if (p.hero.charges <= 0) throw new GameError("Geroyingizda zaryad yo'q");
+    if (this.heroAttacks.has(id) || this.heroSkips.has(id)) throw new GameError("Bu tun qaror qilgansiz, o'zgartirib bo'lmaydi");
+    const t = this.players.get(Number(targetId));
+    if (!t || !t.alive || t.id === id) throw new GameError("Boshqa tirik o'yinchini tanlang");
+    this.heroAttacks.set(id, t.id);
+    if (this.nightDone()) return this.resolveNight();
+    this.onChange();
+  }
+
+  heroSkip(id) {
+    const p = this.players.get(id);
+    if (this.phase !== 'night' || !p || !this.heroPending(p)) return;
+    this.heroSkips.add(id);
+    if (this.nightDone()) return this.resolveNight();
     this.onChange();
   }
 
@@ -325,7 +366,7 @@ export class Game {
     else mode = null;
     this.actions.set(id, { targets, mode });
     // Hamma tungi rollar harakat qilib bo'lsa, tun vaqtni kutmasdan tugaydi
-    if (this.alive.filter((x) => NIGHT_ROLES.has(x.role)).every((x) => this.actions.has(x.id))) return this.resolveNight();
+    if (this.nightDone()) return this.resolveNight();
     this.onChange();
   }
 
@@ -371,6 +412,30 @@ export class Game {
     const kom = one('komissar');
     const komAction = valid(kom) ? this.actions.get(kom.id) : null;
     if (komAction?.mode === 'shoot') attacks.push({ target: komAction.targets[0], kind: 'komissar', by: [kom.id] });
+
+    // Geroy hujumlari: kuch nishon geroyining himoyasidan katta bo'lsa, hujum o'tadi
+    for (const [uid, tid] of this.heroAttacks) {
+      const a = P(uid);
+      const t = P(tid);
+      if (!a?.alive || !t?.alive || uid === blocked || !a.hero || a.hero.charges <= 0) continue;
+      a.hero.charges--;
+      this.onHeroCharge(uid);
+      const power = rollPower(a.hero.power);
+      const def = t.hero?.defense || 0;
+      if (def >= power) {
+        t.hero.defense = def - power;
+        this.onHeroDefense(t.id, t.hero.defense);
+        this.note(t.id, `🛡 Kimningdir geroyi sizga hujum qildi (kuch ${power}), lekin geroyingiz himoyasi qaytardi. Qolgan himoya: ${t.hero.defense}.`);
+        this.note(uid, `🦸 Geroyingiz ${t.name}ga hujum qildi (kuch ${power}), lekin uning geroy himoyasi hujumni qaytardi.`);
+        continue;
+      }
+      if (def > 0) {
+        t.hero.defense = 0;
+        this.onHeroDefense(t.id, 0);
+      }
+      attacks.push({ target: tid, kind: 'hero', by: [uid] });
+      this.note(uid, `🦸 Geroyingiz ${t.name}ga hujum qildi (kuch ${power}${def ? `, himoya ${def} yorildi` : ''}). Qolgan zaryad: ${a.hero.charges}.`);
+    }
 
     // 4. Kim o'ladi
     const deaths = new Map(); // uid -> 'killed' | 'guard'
@@ -866,6 +931,9 @@ export class Game {
         canSpeak: this.canSpeak(uid),
         canLastWords: this.lastWords.has(uid) && ['day', 'vote', 'confirm'].includes(this.phase),
         canMafiaChat: this.phase === 'night' && !!me?.alive && MAFIA_TEAM.has(myRole),
+        hero: me?.hero || null,
+        canHero: this.phase === 'night' && !!me && this.heroPending(me),
+        heroTarget: this.heroAttacks.get(uid) ?? null,
       },
       players: [...this.players.values()].map((p) => ({
         id: p.id,

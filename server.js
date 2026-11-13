@@ -9,6 +9,7 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { Game, GameError, ROLES, OPTIONAL_ROLES, DUR } from './game.js';
 import * as subs from './subs.js';
 import * as db from './db.js';
+import { HERO_SHOP, POINTS_PLAY, POINTS_WIN, levelOf, heroView, CHARGE_PACK, DEFENSE_DAYS } from './hero.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -128,7 +129,9 @@ function createGame(chatId, settings = {}) {
         .catch((e) => console.error('sendMessage:', e.description || e.message));
     },
     onChange: () => broadcast(game),
-    onEnd: (g) => rewardWinners(g),
+    onEnd: (g) => { rewardWinners(g); heroPoints(g); },
+    onHeroCharge: (uid) => { db.heroUseCharge(uid).catch((e) => console.error('heroUseCharge:', e.message)); },
+    onHeroDefense: (uid, def) => { db.heroSetDefense(uid, def).catch((e) => console.error('heroSetDefense:', e.message)); },
     onItemUsed: (uid, item) => {
       db.useItem(uid, item)
         .then((profile) => profile && pushProfile(game, uid, profile))
@@ -170,6 +173,41 @@ if (BOT_TOKEN) {
   });
 
   // Reyting
+  bot.command(['geroy', 'hero'], async (ctx) => {
+    if (!db.COINS_ENABLED) return ctx.reply('Geroy uchun baza ulanmagan.');
+    const pr = await db.getProfile(ctx.from.id).catch(() => null);
+    if (!pr) return ctx.reply("Geroyni o'qib bo'lmadi, keyinroq urinib ko'ring.");
+    return ctx.reply(`${heroCard(pr.hero)}\n\n🪙 Balans: ${pr.coins} YM`, { reply_markup: heroKeyboard() });
+  });
+
+  bot.command('geroy_nom', async (ctx) => {
+    if (!db.COINS_ENABLED) return ctx.reply('Geroy uchun baza ulanmagan.');
+    const name = String(ctx.match || '').trim();
+    if (!name) return ctx.reply(`Yangi nomni yozing: /geroy_nom Qora Shaytan\nNarxi: ${HERO_SHOP.rename.price} YM`);
+    try {
+      const { view, coins } = await buyHero(ctx.from.id, 'rename', name);
+      return ctx.reply(`🖋 Geroyingiz nomi: ${view.name}\n🪙 Balans: ${coins} YM`);
+    } catch (e) {
+      if (e instanceof db.ShopError) return ctx.reply(e.message);
+      console.error('rename:', e.message);
+      return ctx.reply("Nomni o'zgartirib bo'lmadi, keyinroq urinib ko'ring.");
+    }
+  });
+
+  bot.callbackQuery(/^hero:(points|defense|charge)$/, async (ctx) => {
+    try {
+      const { view, coins } = await buyHero(ctx.from.id, ctx.match[1]);
+      await ctx.answerCallbackQuery({ text: `✅ ${HERO_SHOP[ctx.match[1]].name}` });
+      // Kartani faqat xaridor o'zi ko'radigan joyda yangilaymiz
+      if (ctx.chat?.type === 'private') {
+        await ctx.editMessageText(`${heroCard(view)}\n\n🪙 Balans: ${coins} YM`, { reply_markup: heroKeyboard() }).catch(() => {});
+      }
+    } catch (e) {
+      if (!(e instanceof db.ShopError)) console.error('hero buy:', e.message);
+      return ctx.answerCallbackQuery({ text: e instanceof db.ShopError ? e.message : 'Xatolik, keyinroq urinib ko\'ring', show_alert: true });
+    }
+  });
+
   bot.command('top', async (ctx) => {
     if (!db.COINS_ENABLED) return ctx.reply('Reyting uchun baza ulanmagan.');
     const inGroup = isGroup(ctx);
@@ -426,10 +464,88 @@ function loadProfile(game, uid) {
     const p = game.players.get(uid);
     if (!p) return;
     p.stats = pr.stats; // kartada eng ko'p yutgan roli ko'rinadi
-    if (game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; }
+    if (game.phase === 'lobby') { p.items = { ...pr.items }; p.streak = pr.streak; p.hero = pr.hero; }
     broadcast(game);
   }).catch((e) => console.error('getProfile:', e.message));
 }
+
+// ---------- Shaxsiy geroy ----------
+// Foydalanuvchi biror o'yinda tirik o'ynayaptimi (o'yin paytida xarid qilib bo'lmaydi)
+function playingNow(uid) {
+  for (const g of games.values()) {
+    const p = g.players.get(uid);
+    if (p?.alive && !['lobby', 'end'].includes(g.phase)) return true;
+  }
+  return false;
+}
+
+async function buyHero(uid, action, name) {
+  if (playingNow(uid)) throw new db.ShopError("O'yin davomida sotib olib bo'lmaydi. O'yin tugagach yoki lobbida oling.");
+  const res = await db.heroBuy(uid, action, name);
+  const view = heroView(res.hero);
+  // Lobbida turgan bo'lsa, yangi geroy darhol o'yinga o'tadi
+  for (const g of games.values()) {
+    const p = g.players.get(uid);
+    if (p && g.phase === 'lobby') p.hero = view;
+  }
+  pushProfileEverywhere(uid);
+  return { ...res, view };
+}
+
+async function heroBuyWs(ws, action, name) {
+  try {
+    await buyHero(ws.user.id, action, name);
+    send(ws, { type: 'bought', item: HERO_SHOP[action].name });
+  } catch (e) {
+    if (!(e instanceof db.ShopError)) console.error('heroBuy:', e.message);
+    send(ws, { type: 'error', message: e instanceof db.ShopError ? e.message : "Sotib olib bo'lmadi, keyinroq urinib ko'ring" });
+  }
+}
+
+// O'yin tugaganda geroy bali: har kimga o'yin uchun, g'oliblarga qo'shimcha. Daraja oshsa, lichkaga xabar.
+async function heroPoints(game) {
+  if (!db.COINS_ENABLED) return;
+  const players = [...game.players.values()];
+  if (players.some((p) => p.bot)) return; // test o'yinlari hisobga olinmaydi
+  try {
+    const res = await db.addHeroPoints(players.map((p) => ({ id: p.id, points: POINTS_PLAY + (game.winners.has(p.id) ? POINTS_WIN : 0) })));
+    for (const [id, { before, after }] of res) {
+      const lb = levelOf(before);
+      const la = levelOf(after);
+      if (la > lb) dm(id, `⭐ Geroyingiz ${la}-darajaga ko'tarildi! Kuch va himoya oshdi. /geroy`);
+    }
+  } catch (e) {
+    console.error('heroPoints:', e.message);
+  }
+}
+
+// Geroy kartasi (botda /geroy)
+function heroCard(h) {
+  const def = h.defenseUntil ? `${h.defense} (${subs.formatDate(h.defenseUntil)} gacha)` : '0 ❌';
+  const next = h.nextLevel ? `⏫ Keyingi daraja: ${h.level + 1} => ${h.nextLevel} ball` : '🏆 Eng yuqori daraja';
+  return [
+    `🦸 Geroy: ${h.name}`,
+    '',
+    `⭐ Daraja: ${h.level}`,
+    `👊 Kuch: ${h.power[0]}–${h.power[1]}`,
+    `🛡 Himoya: ${def}`,
+    `❤️ Maks. himoya: ${h.maxDefense}`,
+    `🩸 Zaryad: ${h.charges}`,
+    `✅ Ball: ${h.points}`,
+    '',
+    next,
+    '',
+    '🛒 Xaridlar (YM coin):',
+    ...Object.values(HERO_SHOP).map((it) => `${it.name} — ${it.price} YM`),
+    '',
+    `Har 1 YM sarflasangiz +1 ball, Stars uchun 1⭐ = 10 ball, o'yin +${POINTS_PLAY}, g'alaba +${POINTS_WIN}.`,
+    `Himoya ${DEFENSE_DAYS} kun amal qiladi. Zaryadlash +${CHARGE_PACK} o'q. Nom: /geroy_nom Yangi nom`,
+  ].join('\n');
+}
+const heroKeyboard = () => new InlineKeyboard()
+  .text(`➕ 1000 ball — ${HERO_SHOP.points.price} YM`, 'hero:points').row()
+  .text(`🛡 Himoya — ${HERO_SHOP.defense.price} YM`, 'hero:defense')
+  .text(`🩸 Zaryad — ${HERO_SHOP.charge.price} YM`, 'hero:charge');
 
 async function claimBonusWs(ws) {
   if (!db.COINS_ENABLED) return;
@@ -482,6 +598,7 @@ async function setCommandMenu() {
     { command: 'newgame', description: "Yangi o'yin ochish" },
     { command: 'stopgame', description: "O'yinni to'xtatish (o'yin egasi yoki admin)" },
     { command: 'balans', description: 'YM coin balansi va buyumlar' },
+    { command: 'geroy', description: 'Shaxsiy geroyim' },
     { command: 'top', description: 'Guruh reytingi' },
     { command: 'bonus', description: 'Kunlik bonus' },
     { command: 'obuna', description: 'Guruh obunasi holati' },
@@ -491,6 +608,7 @@ async function setCommandMenu() {
     { command: 'start', description: 'Bot haqida va eslatmalarni yoqish' },
     { command: 'balans', description: 'YM coin balansi va buyumlar' },
     { command: 'bonus', description: 'Kunlik bonus' },
+    { command: 'geroy', description: 'Shaxsiy geroyim' },
     { command: 'top', description: 'Umumiy reyting' },
     { command: 'paysupport', description: "To'lov bo'yicha yordam" },
   ];
@@ -606,6 +724,9 @@ function handle(ws, msg) {
     case 'lastwords': return game.sayLastWords(user.id, msg.text);
     case 'buyCoins': return void coinInvoice(ws, msg.pack);
     case 'bonus': return void claimBonusWs(ws);
+    case 'heroAttack': return game.heroAttack(user.id, Number(msg.target));
+    case 'heroSkip': return game.heroSkip(user.id);
+    case 'heroBuy': return void heroBuyWs(ws, String(msg.action || ''), msg.name);
     case 'act': {
       const targets = Array.isArray(msg.targets) ? msg.targets.slice(0, 2) : [msg.target];
       return game.act(user.id, targets, msg.mode);

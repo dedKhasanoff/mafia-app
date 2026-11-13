@@ -134,6 +134,15 @@
   .packs { display: flex; gap: 8px; flex-wrap: wrap; }
   .packs button { flex: 1 1 30%; }
   .bonusbtn { width: 100%; margin: 6px 0 4px; }
+  .herocard { background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 16%, var(--card)), var(--card)); border: 1px solid var(--gold); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
+  .herocard .hn { font-weight: 800; font-size: 16px; display: flex; justify-content: space-between; }
+  .herocard .hs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; font-size: 13px; margin-top: 6px; }
+  .herocard .bar { height: 6px; border-radius: 3px; background: var(--line); margin-top: 8px; overflow: hidden; }
+  .herocard .bar i { display: block; height: 100%; background: var(--gold); }
+  .herobtns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+  .herobtns button:first-child { grid-column: 1 / -1; }
+  #herobar { flex-wrap: wrap; }
+  #herobar .note { flex-basis: 100%; font-size: 13px; color: var(--gold); text-align: center; }
   .group-title {
     grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 6px 2px -2px;
     font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em;
@@ -317,6 +326,7 @@
   <div id="watch" class="watch-banner" hidden>👀 Siz tomosha qilyapsiz. Yangi o'yinga guruhda /newgame orqali qo'shilasiz.</div>
   <div id="hint"></div>
   <div id="modes" class="modes"></div>
+  <div id="herobar" class="modes"></div>
   <div id="grid"></div>
   <div id="actions"></div>
   <div id="lastw" class="panel" hidden>
@@ -350,6 +360,8 @@ let myCoins = null;      // YM coin balansi (baza ulangan bo'lsa)
 let myItems = {}, shopList = null, myStats = {};
 let myBonusTaken = true, coinPacks = [], bonusAmount = 0;
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
+let heroMode = false;    // tunda geroy bilan hujum uchun nishon tanlanmoqda
+let myHero = null;       // shaxsiy geroy (profil bilan keladi)
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
 
@@ -479,6 +491,7 @@ function connect() {
         lastKey = key;
         pending = [];
         komMode = m.me.choice?.mode || 'check';
+        heroMode = false;
       }
       // Animatsiyalar uchun nima o'zgarganini aniqlaymiz
       if (prev) {
@@ -500,6 +513,7 @@ function connect() {
       myItems = m.items || {};
       myStats = m.stats || {};
       myBonusTaken = !!m.bonusTaken;
+      if (m.hero) myHero = m.hero;
       coinPacks = m.packs || coinPacks;
       bonusAmount = m.bonus || bonusAmount;
       shopList = m.shop || shopList;
@@ -561,6 +575,7 @@ const nameOf = (id) => state.players.find((p) => p.id === id)?.name ?? '?';
 
 function canTarget(p) {
   const s = state, me = s.me, role = me.role;
+  if (heroMode && s.phase === 'night') return me.canHero && p.alive && p.id !== me.id;
   if (!me.canAct || !p.alive || me.choice) return false; // tanlov bir marta qilinadi
   if (s.phase === 'vote' || s.phase === 'kamikaze') return p.id !== me.id;
   if (s.phase === 'night') {
@@ -575,6 +590,11 @@ function canTarget(p) {
 function onPick(p) {
   const s = state;
   tg?.HapticFeedback?.selectionChanged();
+  if (heroMode && s.phase === 'night') {
+    heroMode = false;
+    sendMsg({ type: 'heroAttack', target: p.id });
+    return render();
+  }
   if (s.phase === 'vote') return sendMsg({ type: 'vote', target: p.id });
   if (s.phase === 'kamikaze') return sendMsg({ type: 'kamikaze', target: p.id });
   if (s.me.role === 'jurnalist') {
@@ -613,6 +633,7 @@ function hintText() {
     return s.kamikazeId === me.id ? "💣 Siz portlayapsiz! O'zingiz bilan kimni olib ketasiz?" : `💣 ${nameOf(s.kamikazeId)} kimnidir tanlamoqda…`;
   }
   if (!me.alive) return "Siz o'ldingiz 💀 Kuzatishingiz mumkin, lekin maslahat bermang!";
+  if (s.phase === 'night' && heroMode) return '🦸 Geroyingiz kimga hujum qilsin? O\'yinchini bosing.';
   if (s.phase === 'night') {
     const base = NIGHT_HINT[me.role];
     if (!base) return "Shahar uxlayapti… 😴 Tong otishini kuting.";
@@ -687,6 +708,18 @@ function render() {
       };
       modes.append(b);
     }
+  }
+
+  // Shaxsiy geroy: tunda hujum yoki hujumsiz
+  const hb = $('herobar'); hb.replaceChildren();
+  if (s.phase === 'night' && me.canHero) {
+    const atk = el('button', 'btn' + (heroMode ? '' : ' ghost'), `🦸 ${me.hero.name}: hujum (zaryad ${me.hero.charges})`);
+    atk.onclick = () => { heroMode = !heroMode; tg?.HapticFeedback?.impactOccurred('light'); render(); };
+    const skip = el('button', 'btn ghost', 'Hujumsiz');
+    skip.onclick = () => { heroMode = false; sendMsg({ type: 'heroSkip' }); };
+    hb.append(atk, skip);
+  } else if (s.phase === 'night' && me.heroTarget != null) {
+    hb.append(el('div', 'note', `🦸 Geroyingiz bu tun ${nameOf(me.heroTarget)}ga hujum qiladi`));
   }
 
   // O'yinchilar
@@ -1034,6 +1067,9 @@ $('shop').onclick = (e) => { if (e.target === $('shop')) $('shop').hidden = true
 
 function renderShop() {
   if ($('shop').hidden || !shopList) return;
+  // Qayta chizishda yozilayotgan geroy nomi yo'qolmasin
+  const prevName = $('heroName')?.value || '';
+  const hadFocus = document.activeElement?.id === 'heroName';
   const sh = $('sheet'); sh.replaceChildren();
   const h = el('h2', '', '👤 Profil');
   h.append(el('span', 'bal', `🪙 ${myCoins ?? 0} YM`));
@@ -1044,6 +1080,47 @@ function renderShop() {
     bb.disabled = myBonusTaken;
     bb.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'bonus' }); };
     sh.append(bb);
+  }
+  // Shaxsiy geroy
+  if (myHero) {
+    const h = myHero;
+    sh.append(el('h3', '', '🦸 Geroyim'));
+    const card = el('div', 'herocard');
+    const hn = el('div', 'hn', h.name);
+    hn.append(el('span', '', `⭐ ${h.level}`));
+    const hs = el('div', 'hs');
+    const def = h.defenseUntil ? `${h.defense} / ${h.maxDefense}` : `0 / ${h.maxDefense} ❌`;
+    for (const t of [`👊 Kuch: ${h.power[0]}–${h.power[1]}`, `🛡 Himoya: ${def}`, `🩸 Zaryad: ${h.charges}`, `✅ Ball: ${h.points}`]) hs.append(el('span', '', t));
+    card.append(hn, hs);
+    if (h.nextLevel) {
+      const bar = el('div', 'bar'); const fill = el('i');
+      fill.style.width = `${Math.min(100, (h.points / h.nextLevel) * 100)}%`;
+      bar.append(fill);
+      card.append(bar, el('div', 'note', `Keyingi daraja (${h.level + 1}): ${h.nextLevel} ball`));
+    }
+    sh.append(card);
+    const busy = state?.me?.alive && !['lobby', 'end'].includes(state?.phase);
+    const btns = el('div', 'herobtns');
+    for (const [action, text, price] of [['points', '➕ 1000 ball', 1000], ['defense', '🛡 Himoya', 300], ['charge', '🩸 Zaryad +3', 400]]) {
+      const b = el('button', 'btn small', `${text} · ${price} YM`);
+      b.disabled = busy || (myCoins ?? 0) < price;
+      b.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'heroBuy', action }); };
+      btns.append(b);
+    }
+    sh.append(btns);
+    const row = el('div', 'chatrow');
+    const inp = el('input'); inp.maxLength = 20; inp.placeholder = 'Yangi nom'; inp.id = 'heroName';
+    const rb = el('button', 'btn small', '🖋 2000 YM');
+    rb.disabled = busy || (myCoins ?? 0) < 2000;
+    rb.onclick = () => {
+      const name = $('heroName').value.trim();
+      if (!name) return toast('Geroy uchun yangi nom yozing');
+      sendMsg({ type: 'heroBuy', action: 'rename', name });
+    };
+    inp.value = prevName;
+    row.append(inp, rb);
+    sh.append(row, el('div', 'note', "Ball: o'yin +50, g'alaba +100, har 1 YM sarflash +1, har 1⭐ +10."));
+    if (hadFocus) inp.focus();
   }
   // G'alabalar: rollar bo'yicha, ko'pidan kamiga
   sh.append(el('h3', '', "🏆 G'alabalarim"));

@@ -78,6 +78,14 @@ export async function init() {
       defense_until TIMESTAMPTZ,
       charges INTEGER NOT NULL DEFAULT 0 -- zaryad faqat sotib olinadi
     )`);
+  // Bot turgan guruhlar (/elon uchun)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bot_groups (
+      chat_id BIGINT PRIMARY KEY,
+      title TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
   // Guruh sozlamalari (/sozlamalar)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS group_settings (
@@ -257,6 +265,22 @@ export async function getSettings(chatId) {
   if (!pool) return null;
   const { rows } = await pool.query('SELECT settings FROM group_settings WHERE chat_id = $1', [chatId]);
   return rows[0]?.settings || null;
+}
+
+// ---------- Bot turgan guruhlar ----------
+export async function rememberGroup(chatId, title, active = true) {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO bot_groups (chat_id, title, active) VALUES ($1, $2, $3)
+     ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, bot_groups.title), active = $3, updated_at = now()`,
+    [chatId, title || null, active],
+  );
+}
+
+export async function activeGroups() {
+  if (!pool) return [];
+  const { rows } = await pool.query('SELECT chat_id, title FROM bot_groups WHERE active ORDER BY chat_id');
+  return rows.map((r) => ({ id: Number(r.chat_id), title: r.title }));
 }
 
 export async function saveSettings(chatId, settings) {

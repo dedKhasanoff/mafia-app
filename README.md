@@ -128,6 +128,14 @@ Har bir o'yinchining o'z geroyi bor (`/geroy` botda yoki ilovada profil ustiga b
 - **Xaridlar (YM):** +1000 ball — 1000, himoyani to'ldirish (7 kun) — 300, zaryad +3 — 400, nomni o'zgartirish — 2000 (`/geroy_nom Yangi nom`).
   Yangi geroyda zaryad yo'q. O'yin davomida sotib olib bo'lmaydi.
 
+## 📢 E'lon barcha guruhlarga (`/elon`)
+
+Bot qaysi guruhlarda turganini o'zi eslab qoladi (baza kerak). E'lonni faqat bot egasi yuboradi:
+1. Botga lichkada `/myid` yozing va chiqqan raqamni Render'da `OWNER_IDS` ga qo'shing (bir nechta bo'lsa, vergul bilan).
+2. E'lon matnini (rasm bilan ham bo'ladi) botga lichkada yozing.
+3. O'sha xabarga javob (reply) qilib `/elon` yozing: bot ko'rinishini ko'rsatadi va «✅ Yuborish» tugmasini beradi.
+Botni chiqarib yuborgan guruhlar keyingi safar ro'yxatdan o'tkazib yuboriladi.
+
 ## ⭐ Guruh obunasi
 
 `/newgame` faqat obunasi faol guruhda ishlaydi. Obuna bo'lmasa, bot «⭐ Obuna bo'lish» tugmasini yuboradi:
@@ -179,6 +187,7 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `DAILY_BONUS` | 10 | Kunlik bonus (YM) |
 | `COIN_PACKS` | `50:100,100:250,250:700` | Coin paketlari: `stars:coin`, vergul bilan |
 | `TELEGRAM_API_ROOT` | — | Boshqa Bot API manzili (odatda kerak emas) |
+| `OWNER_IDS` | — | Bot egasining Telegram ID'si (`/elon` uchun), `/myid` bilan bilinadi |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)

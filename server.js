@@ -17,6 +17,8 @@ const APP_SHORT_NAME = process.env.APP_SHORT_NAME || 'mafia';
 // DEV_AUTH=1 faqat kompyuterda sinash uchun: Telegramsiz brauzerda kirishga ruxsat beradi.
 // Railway'da HECH QACHON yoqmang.
 const DEV_AUTH = process.env.DEV_AUTH === '1';
+// Bot egasi(lar)ning Telegram ID'si: /elon faqat ularga ishlaydi. ID'ni bilish: botga /myid
+const OWNER_IDS = new Set((process.env.OWNER_IDS || '').split(',').map((s) => Number(s.trim())).filter(Boolean));
 
 if (!BOT_TOKEN && !DEV_AUTH) {
   console.error('BOT_TOKEN o\'rnatilmagan.');
@@ -153,6 +155,76 @@ if (BOT_TOKEN) {
   // TELEGRAM_API_ROOT: boshqa Bot API serveri (masalan, o'z Bot API serveringiz yoki sinov uchun). Odatda kerak emas.
   bot = new Bot(BOT_TOKEN, process.env.TELEGRAM_API_ROOT ? { client: { apiRoot: process.env.TELEGRAM_API_ROOT } } : {});
   const isGroup = (ctx) => ['group', 'supergroup'].includes(ctx.chat?.type);
+
+  // Bot qaysi guruhlarda turganini eslab qolamiz (/elon uchun). Har guruh jarayonda bir marta yoziladi.
+  const seenGroups = new Set();
+  bot.use(async (ctx, next) => {
+    if (isGroup(ctx) && !seenGroups.has(ctx.chat.id)) {
+      seenGroups.add(ctx.chat.id);
+      db.rememberGroup(ctx.chat.id, ctx.chat.title).catch((e) => console.error('rememberGroup:', e.message));
+    }
+    return next();
+  });
+  // Botni guruhga qo'shishdi yoki chiqarishdi
+  bot.on('my_chat_member', (ctx) => {
+    if (!isGroup(ctx)) return;
+    const st = ctx.myChatMember.new_chat_member.status;
+    const active = ['member', 'administrator', 'creator', 'restricted'].includes(st);
+    db.rememberGroup(ctx.chat.id, ctx.chat.title, active).catch((e) => console.error('rememberGroup:', e.message));
+  });
+
+  // Telegram ID'ni bilish uchun (OWNER_IDS sozlamasiga yoziladi)
+  bot.command(['myid', 'id'], (ctx) => ctx.reply(`Sizning Telegram ID: ${ctx.from.id}`));
+
+  // ---------- E'lon: barcha guruhlarga (faqat bot egasi) ----------
+  const pendingElon = new Map(); // egasi -> { chatId, messageId }
+  bot.command('elon', async (ctx) => {
+    if (!OWNER_IDS.has(ctx.from.id)) return; // begonalarga javob bermaymiz
+    if (ctx.chat.type !== 'private') return ctx.reply("/elon ni botning lichkasida ishlating.");
+    const src = ctx.message.reply_to_message;
+    if (!src) {
+      return ctx.reply("E'lon matnini (yoki rasm bilan) shu yerga yozing, keyin o'sha xabarga javob (reply) qilib /elon deb yozing.");
+    }
+    if (!db.COINS_ENABLED) return ctx.reply("Guruhlar ro'yxati uchun baza (DATABASE_URL) kerak.");
+    const groups = await db.activeGroups().catch(() => []);
+    if (!groups.length) return ctx.reply("Hozircha bot turgan guruhlar ro'yxati bo'sh.");
+    pendingElon.set(ctx.from.id, { chatId: ctx.chat.id, messageId: src.message_id });
+    await ctx.reply("👇 E'lon shunday ko'rinadi:");
+    await ctx.api.copyMessage(ctx.chat.id, ctx.chat.id, src.message_id).catch(() => {});
+    return ctx.reply(`${groups.length} ta guruhga yuborilsinmi?`, {
+      reply_markup: new InlineKeyboard().text(`✅ Yuborish (${groups.length})`, 'elon:go').text('❌ Bekor', 'elon:no'),
+    });
+  });
+  bot.callbackQuery(/^elon:(go|no)$/, async (ctx) => {
+    if (!OWNER_IDS.has(ctx.from.id)) return ctx.answerCallbackQuery();
+    const job = pendingElon.get(ctx.from.id);
+    pendingElon.delete(ctx.from.id);
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+    if (ctx.match[1] === 'no' || !job) {
+      await ctx.answerCallbackQuery({ text: 'Bekor qilindi' });
+      return job ? ctx.reply("❌ E'lon bekor qilindi.") : undefined;
+    }
+    await ctx.answerCallbackQuery({ text: 'Yuborilmoqda…' });
+    const groups = await db.activeGroups().catch(() => []);
+    await ctx.reply(`📤 ${groups.length} ta guruhga yuborilmoqda…`);
+    let sent = 0;
+    let failed = 0;
+    for (const g of groups) {
+      try {
+        await bot.api.copyMessage(g.id, job.chatId, job.messageId);
+        sent++;
+      } catch (e) {
+        failed++;
+        // Bot guruhdan chiqarilgan yoki guruh yo'q: keyingi safar yubormaymiz
+        if (e.error_code === 403 || e.error_code === 400) db.rememberGroup(g.id, null, false).catch(() => {});
+        // Telegram "sekinroq" desa, aytilgan vaqt kutamiz
+        const wait = e.parameters?.retry_after;
+        if (wait) await new Promise((r) => setTimeout(r, wait * 1000));
+      }
+      await new Promise((r) => setTimeout(r, 60)); // soniyasiga ~15 ta: Telegram cheklovidan past
+    }
+    return ctx.reply(`✅ E'lon yuborildi: ${sent} ta guruh${failed ? `\n⚠️ Yuborilmadi: ${failed} ta (bot chiqarilgan yoki yozish taqiqlangan)` : ''}`);
+  });
 
   bot.command('start', (ctx) => {
     if (ctx.chat.type !== 'private') return;

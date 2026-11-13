@@ -116,7 +116,8 @@ Coin'lar saqlanishi uchun bepul Postgres kerak, masalan **Neon**:
 
 ## 🦸 Shaxsiy geroy
 
-Har bir o'yinchining o'z geroyi bor (`/geroy` botda yoki ilovada profil ustiga bosib).
+Geroy **Telegram Stars bilan bir marta sotib olinadi** (standart 100⭐, `HERO_PRICE`): `/geroy` botda yoki ilovada profil orqali.
+Sotib olmaganlarda geroy yo'q va ularga ball yozilmaydi.
 
 - **Daraja** ball bilan oshadi: 2-daraja 1100, 3-daraja 3000, keyin 6000, 10000 ... (10 darajagacha).
   Har darajada kuch +10 (1-darajada 40–46) va maksimal himoya +20 (1-darajada 30).
@@ -188,6 +189,7 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `COIN_PACKS` | `50:100,100:250,250:700` | Coin paketlari: `stars:coin`, vergul bilan |
 | `TELEGRAM_API_ROOT` | — | Boshqa Bot API manzili (odatda kerak emas) |
 | `OWNER_IDS` | — | Bot egasining Telegram ID'si (`/elon` uchun), `/myid` bilan bilinadi |
+| `HERO_PRICE` | 100 | Geroy narxi (Stars) |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)

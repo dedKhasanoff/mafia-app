@@ -19,7 +19,7 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; min-height: 100%; }
   body {
-    background: var(--sky), var(--bg); background-attachment: fixed;
+    background: var(--sky), var(--bg);
     color: var(--text); font: 15px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
     transition: background .6s, color .6s;
   }
@@ -53,7 +53,7 @@
   /* O'yin boshida katta rol kartasi */
   #reveal {
     position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px;
-    background: rgba(5,7,16,.82); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    background: rgba(5,7,16,.88);
     transition: background .5s;
   }
   #reveal[hidden] { display: none; }
@@ -216,12 +216,13 @@
   #app { position: relative; z-index: 1; }
   #sky { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
   #stars, #clouds { position: absolute; inset: 0; transition: opacity 1.2s; }
-  .star { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; animation: twinkle 3s infinite ease-in-out; }
+  .star { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; opacity: .6; }
+  .star.tw { animation: twinkle 3s infinite ease-in-out; }
   @keyframes twinkle { 0%, 100% { opacity: .2; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.3); } }
   .orb { position: absolute; top: 10px; right: 96px; width: 46px; height: 46px; border-radius: 50%; transition: transform 1.4s cubic-bezier(.3,.8,.3,1), opacity 1.2s; }
   #moon { background: radial-gradient(circle at 35% 35%, #fffbe8, #d9d3b4 60%, #b3ab88); box-shadow: 0 0 40px 10px rgba(255,250,220,.18); }
   #moon::after { content: ''; position: absolute; width: 9px; height: 9px; top: 25px; left: 12px; border-radius: 50%; background: rgba(0,0,0,.08); box-shadow: 22px -16px 0 -3px rgba(0,0,0,.07); }
-  #sun { background: radial-gradient(circle, #fff3c4, #ffc65c 55%, #ff9a3c); box-shadow: 0 0 60px 20px rgba(255,170,60,.35); animation: spin 30s linear infinite; }
+  #sun { background: radial-gradient(circle, #fff3c4, #ffc65c 55%, #ff9a3c); box-shadow: 0 0 60px 20px rgba(255,170,60,.35); }
   @keyframes spin { to { rotate: 360deg; } }
   .cloud { position: absolute; height: 26px; border-radius: 20px; background: rgba(255,240,220,.08); animation: drift linear infinite; }
   .cloud::before, .cloud::after { content: ''; position: absolute; background: inherit; border-radius: 50%; }
@@ -280,7 +281,7 @@
   @keyframes skull { 0% { opacity: 0; transform: translateY(-30px) scale(.4); } 30% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
   .votes.bump { animation: bump .4s; }
   @keyframes bump { 50% { transform: scale(1.5); } }
-  .player.selected .avatar { animation: glow 1.6s infinite; }
+  .player.selected .avatar { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); }
   @keyframes glow { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 40%, transparent); } }
   #timer { position: relative; }
   #timer::before {
@@ -361,7 +362,10 @@ let myItems = {}, shopList = null, myStats = {};
 let myBonusTaken = true, coinPacks = [], bonusAmount = 0;
 let komMode = 'check';   // Komissar: 'check' yoki 'shoot'
 let heroMode = false;    // tunda geroy bilan hujum uchun nishon tanlanmoqda
+let rolesCache = {};      // rollar ta'rifi: server bir marta yuboradi
+let lastGridSig = '', lastListSig = '';
 let myHero = null;       // shaxsiy geroy (profil bilan keladi)
+let heroPrice = null;    // geroy narxi (Stars)
 let pending = [];        // Jurnalist tanlayotgan ikki kishi
 let lastKey = '';        // faza o'zgarganini bilish uchun
 
@@ -372,9 +376,9 @@ let sceneOpen = false, sceneTimer = null;
 // ---------- Osmon: yulduzlar va bulutlar ----------
 (function buildSky() {
   const stars = $('stars');
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < 36; i++) {
     const s = document.createElement('div');
-    s.className = 'star';
+    s.className = i % 4 === 0 ? 'star tw' : 'star'; // faqat har to'rtinchisi miltillaydi (telefon qizimasin)
     const size = Math.random() < .15 ? 3 : 2;
     Object.assign(s.style, {
       left: `${Math.random() * 100}%`, top: `${Math.random() * 70}%`, width: `${size}px`, height: `${size}px`,
@@ -482,7 +486,12 @@ function connect() {
   ws.onopen = () => { retry = 0; ws.send(JSON.stringify(authMessage())); };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
+    if (m.type === 'roles') {
+      rolesCache = m.roles;
+      return;
+    }
     if (m.type === 'state') {
+      m.roles = rolesCache;
       const prev = state;
       state = m;
       endAt = m.remaining != null ? Date.now() + m.remaining : null;
@@ -513,7 +522,8 @@ function connect() {
       myItems = m.items || {};
       myStats = m.stats || {};
       myBonusTaken = !!m.bonusTaken;
-      if (m.hero) myHero = m.hero;
+      if ('hero' in m) myHero = m.hero; // null: geroy sotib olinmagan
+      if (m.heroPrice) heroPrice = m.heroPrice;
       coinPacks = m.packs || coinPacks;
       bonusAmount = m.bonus || bonusAmount;
       shopList = m.shop || shopList;
@@ -724,7 +734,13 @@ function render() {
 
   // O'yinchilar
   const chosen = new Set(me.role === 'jurnalist' && s.phase === 'night' && pending.length ? pending : me.choice?.targets || []);
-  const grid = $('grid'); grid.replaceChildren();
+  const grid = $('grid');
+  // Faqat ko'rinadigan narsa o'zgarganda qayta chizamiz (sekin telefonlarda eng og'ir qism shu)
+  const gridSig = JSON.stringify([s.phase, s.winner, s.players, [...chosen], me.canAct, me.choice, me.canHero, me.role,
+    heroMode, komMode, talkingId, sceneOpen, s.teamPicks, s.accusedId, s.hostId, [...fx.enter], [...fx.dying], [...fx.bump]]);
+  if (gridSig !== lastGridSig) {
+  lastGridSig = gridSig;
+  grid.replaceChildren();
   // Guruhlar: lobbida hammasi birga; o'yinda tiriklar va o'lganlar; oxirida g'oliblar va mag'lublar
   let groups;
   if (s.phase === 'lobby') groups = [[null, s.players]];
@@ -767,6 +783,7 @@ function render() {
 
     if (selectable) c.onclick = () => onPick(p);
     grid.append(c);
+  }
   }
   }
   fx.enter.clear();
@@ -821,8 +838,12 @@ function render() {
   }));
   if (atBottom) ml.scrollTop = ml.scrollHeight;
 
+  const listSig = JSON.stringify([s.notes, s.checks, s.canReveal, s.log, s.players.map((p) => p.name)]);
+  const listsChanged = listSig !== lastListSig;
+  lastListSig = listSig;
   // Shaxsiy xabarlar
   $('notes').hidden = !s.notes.length;
+  if (listsChanged) {
   const nl = $('noteList'); nl.replaceChildren();
   for (const n of [...s.notes].reverse()) {
     const li = el('li');
@@ -848,6 +869,7 @@ function render() {
   // Voqealar
   const log = $('log'); log.replaceChildren();
   for (const item of [...s.log].reverse()) log.append(el('li', '', item.text));
+  }
 
   updateMic();
   renderShop();
@@ -982,10 +1004,13 @@ async function playNext() {
   }
 }
 
+let lastSec = null;
 function tickTimer() {
   const t = $('timer');
-  if (!endAt) { t.textContent = ''; return; }
+  if (!endAt) { if (lastSec !== null) { t.textContent = ''; lastSec = null; } return; }
   const sec = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+  if (sec === lastSec) return;
+  lastSec = sec;
   t.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
   t.classList.toggle('low', sec <= 10);
   if (state?.duration) t.style.setProperty('--p', Math.max(0, Math.min(100, ((endAt - Date.now()) / state.duration) * 100)));
@@ -1080,6 +1105,18 @@ function renderShop() {
     bb.disabled = myBonusTaken;
     bb.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'bonus' }); };
     sh.append(bb);
+  }
+  // Shaxsiy geroy: sotib olinmagan bo'lsa, taklif
+  if (!myHero && heroPrice) {
+    sh.append(el('h3', '', '🦸 Shaxsiy geroy'));
+    const card = el('div', 'herocard');
+    card.append(el('div', 'hn', '🦸 O\'z geroyingizga ega bo\'ling'),
+      el('div', 'note', "Daraja oshiradi, tunda istalgan o'yinchiga hujum qiladi va sizni boshqa geroylardan himoya qiladi."));
+    const b = el('button', 'btn', `🦸 Geroy sotib olish · ${heroPrice}⭐`);
+    b.style.width = '100%'; b.style.marginTop = '8px';
+    b.onclick = () => { tg?.HapticFeedback?.impactOccurred('medium'); sendMsg({ type: 'heroUnlock' }); };
+    card.append(b);
+    sh.append(card);
   }
   // Shaxsiy geroy
   if (myHero) {

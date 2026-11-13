@@ -905,7 +905,7 @@ export class Game {
       type: 'state',
       phase: this.phase,
       round: this.round,
-      remaining: this.deadline ? Math.max(0, this.deadline - Date.now()) : null,
+      remaining: this.deadline ? Math.max(0, Math.ceil((this.deadline - Date.now()) / 1000) * 1000) : null,
       duration: this.deadline ? this.phaseTotal : null,
       events: this.events,
       eventsId: this.eventsId,
@@ -919,7 +919,6 @@ export class Game {
       accusedId: this.phase === 'confirm' ? this.accusedId : null,
       // Yashirin ovoz: faqat nechta odam ovoz bergani, kim nima degani yuborilmaydi
       confirm: this.phase === 'confirm' ? { voted: this.confirmVotes.size, total: this.confirmVoters.length } : null,
-      roles: ROLES,
       me: {
         id: uid,
         joined: !!me,

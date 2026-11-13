@@ -2,8 +2,6 @@
 import pg from 'pg';
 import { HERO_SHOP, levelOf, maxDefense, cleanName, CHARGE_PACK, DEFENSE_DAYS, POINTS_PER_YM, POINTS_PER_STAR, heroView } from './hero.js';
 
-// Hali yaratilmagan geroy qanday ko'rinadi
-const NEW_HERO = { name: 'Geroy', points: 0, defense: 0, defense_until: null, charges: 0 };
 
 export const COIN_REWARD = Number(process.env.COIN_REWARD || 20);
 
@@ -78,6 +76,8 @@ export async function init() {
       defense_until TIMESTAMPTZ,
       charges INTEGER NOT NULL DEFAULT 0 -- zaryad faqat sotib olinadi
     )`);
+  // Geroy faqat Stars bilan sotib olinganda ochiladi
+  await pool.query('ALTER TABLE heroes ADD COLUMN IF NOT EXISTS owned BOOLEAN NOT NULL DEFAULT false');
   // Bot turgan guruhlar (/elon uchun)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bot_groups (
@@ -120,7 +120,7 @@ export async function getProfile(id) {
   ]);
   return {
     ...toProfile(rows[0], Object.fromEntries(wins.rows.map((r) => [r.role, r.wins]))),
-    hero: heroView(hero.rows[0] || NEW_HERO),
+    hero: hero.rows[0]?.owned ? heroView(hero.rows[0]) : null, // geroy sotib olinmagan bo'lsa: null
   };
 }
 
@@ -237,11 +237,8 @@ export async function addPurchasedCoins(chargeId, id, name, stars, coins) {
        ON CONFLICT (id) DO UPDATE SET coins = players.coins + $3, name = $2, updated_at = now() RETURNING coins`,
       [id, name, coins],
     );
-    await client.query(
-      `INSERT INTO heroes (player_id, points) VALUES ($1, $2)
-       ON CONFLICT (player_id) DO UPDATE SET points = heroes.points + $2`,
-      [id, stars * POINTS_PER_STAR],
-    );
+    // Geroyi bor bo'lsa, Stars uchun ball
+    await client.query('UPDATE heroes SET points = points + $2 WHERE player_id = $1 AND owned', [id, stars * POINTS_PER_STAR]);
     await client.query('COMMIT');
     return rows[0].coins;
   } catch (e) {
@@ -311,13 +308,12 @@ export async function addHeroPoints(list) {
   if (!pool) return out;
   for (const { id, points } of list) {
     if (!points) continue;
+    // Ball faqat geroyi bor o'yinchilarga
     const { rows } = await pool.query(
-      `INSERT INTO heroes (player_id, points) VALUES ($1, $2)
-       ON CONFLICT (player_id) DO UPDATE SET points = heroes.points + $2
-       RETURNING points`,
+      'UPDATE heroes SET points = points + $2 WHERE player_id = $1 AND owned RETURNING points',
       [id, points],
     );
-    out.set(id, { before: rows[0].points - points, after: rows[0].points });
+    if (rows.length) out.set(id, { before: rows[0].points - points, after: rows[0].points });
   }
   return out;
 }
@@ -342,6 +338,7 @@ export async function heroBuy(id, action, newName) {
     if (!pay.rows.length) throw new ShopError(`YM coin yetmaydi: ${item.price} YM kerak`);
     await client.query('INSERT INTO heroes (player_id) VALUES ($1) ON CONFLICT DO NOTHING', [id]);
     const cur = (await client.query('SELECT * FROM heroes WHERE player_id = $1 FOR UPDATE', [id])).rows[0];
+    if (!cur.owned) throw new ShopError('Avval geroy sotib oling: /geroy');
     // Sarflangan coin ham ball beradi (+1000 ball xaridining o'zidan tashqari)
     const points = cur.points + (action === 'points' ? 1000 : item.price * POINTS_PER_YM);
     const defense = action === 'defense' ? maxDefense(levelOf(points)) : cur.defense;
@@ -355,6 +352,36 @@ export async function heroBuy(id, action, newName) {
     )).rows[0];
     await client.query('COMMIT');
     return { hero, coins: pay.rows[0].coins };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Geroyni Stars bilan sotib olish. Bir xil to'lov ikki marta hisoblanmaydi.
+// Qaytaradi: geroy qatori yoki null (bu to'lov allaqachon hisoblangan)
+export async function buyHeroWithStars(chargeId, id, name, stars) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ins = await client.query(
+      'INSERT INTO payments (charge_id, player_id, stars, coins) VALUES ($1, $2, $3, 0) ON CONFLICT DO NOTHING RETURNING charge_id',
+      [chargeId, id, stars],
+    );
+    if (!ins.rows.length) { await client.query('ROLLBACK'); return null; }
+    await client.query(
+      `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = $2, updated_at = now()`,
+      [id, name],
+    );
+    const { rows } = await client.query(
+      `INSERT INTO heroes (player_id, owned) VALUES ($1, true)
+       ON CONFLICT (player_id) DO UPDATE SET owned = true RETURNING *`,
+      [id],
+    );
+    await client.query('COMMIT');
+    return rows[0];
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

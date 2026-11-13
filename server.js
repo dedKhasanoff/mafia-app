@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import compression from 'compression';
 import { WebSocketServer } from 'ws';
 import { Bot, InlineKeyboard } from 'grammy';
 import { Game, GameError, ROLES, OPTIONAL_ROLES, DUR } from './game.js';
@@ -18,6 +19,8 @@ const APP_SHORT_NAME = process.env.APP_SHORT_NAME || 'mafia';
 // Railway'da HECH QACHON yoqmang.
 const DEV_AUTH = process.env.DEV_AUTH === '1';
 // Bot egasi(lar)ning Telegram ID'si: /elon faqat ularga ishlaydi. ID'ni bilish: botga /myid
+// Geroy narxi (Telegram Stars). Geroy faqat sotib olinganda ochiladi
+const HERO_PRICE = Number(process.env.HERO_PRICE || 100);
 const OWNER_IDS = new Set((process.env.OWNER_IDS || '').split(',').map((s) => Number(s.trim())).filter(Boolean));
 
 if (!BOT_TOKEN && !DEV_AUTH) {
@@ -249,6 +252,12 @@ if (BOT_TOKEN) {
     if (!db.COINS_ENABLED) return ctx.reply('Geroy uchun baza ulanmagan.');
     const pr = await db.getProfile(ctx.from.id).catch(() => null);
     if (!pr) return ctx.reply("Geroyni o'qib bo'lmadi, keyinroq urinib ko'ring.");
+    if (!pr.hero) {
+      const text = `🦸 Shaxsiy geroy\n\nGeroy daraja oshiradi, tunda istalgan o'yinchiga hujum qiladi va sizni boshqa geroylardan himoya qiladi.\n\nNarxi: ${HERO_PRICE}⭐ (bir marta)`;
+      const url = await heroInvoiceUrl().catch((e) => { console.error('hero invoice:', e.description || e.message); return null; });
+      return ctx.reply(url ? text : `${text}\n\n⚠️ To'lov havolasini yaratib bo'lmadi, keyinroq urinib ko'ring.`,
+        url ? { reply_markup: new InlineKeyboard().url(`🦸 Geroy sotib olish — ${HERO_PRICE}⭐`, url) } : {});
+    }
     return ctx.reply(`${heroCard(pr.hero)}\n\n🪙 Balans: ${pr.coins} YM`, { reply_markup: heroKeyboard() });
   });
 
@@ -388,12 +397,31 @@ if (BOT_TOKEN) {
   bot.on('pre_checkout_query', (ctx) => {
     const q = ctx.preCheckoutQuery;
     const pack = coinPack(q.invoice_payload);
-    const ok = subs.validPayload(q.invoice_payload) || (pack && db.COINS_ENABLED && q.total_amount === pack.stars);
+    const ok = subs.validPayload(q.invoice_payload) || (pack && db.COINS_ENABLED && q.total_amount === pack.stars)
+      || (q.invoice_payload === 'hero' && db.COINS_ENABLED && q.total_amount === HERO_PRICE);
     return ok ? ctx.answerPreCheckoutQuery(true) : ctx.answerPreCheckoutQuery(false, { error_message: "Noto'g'ri to'lov" });
   });
 
   bot.on('message:successful_payment', async (ctx) => {
     const p = ctx.message.successful_payment;
+    if (p.invoice_payload === 'hero') {
+      const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ').slice(0, 40);
+      try {
+        const row = await db.buyHeroWithStars(p.telegram_payment_charge_id, ctx.from.id, name, p.total_amount);
+        if (!row) return; // bu to'lov allaqachon hisoblangan
+        console.log(`Geroy sotib olindi: ${ctx.from.id}, ${p.total_amount} Stars`);
+        const view = heroView(row);
+        for (const g of games.values()) {
+          const pl = g.players.get(ctx.from.id);
+          if (pl && g.phase === 'lobby') pl.hero = view;
+        }
+        pushProfileEverywhere(ctx.from.id);
+        return ctx.reply("🦸 Tabriklaymiz! Shaxsiy geroyingiz tayyor.\nZaryad sotib oling va tunda hujum qiling: /geroy").catch(() => {});
+      } catch (e) {
+        console.error('Geroy xaridida xato:', e.message);
+        return ctx.reply("⚠️ To'lov qabul qilindi, lekin geroyni ochishda xato bo'ldi. /paysupport orqali yozing.").catch(() => {});
+      }
+    }
     const pack = coinPack(p.invoice_payload);
     if (pack) {
       // YM coin sotib olish
@@ -574,6 +602,27 @@ async function heroBuyWs(ws, action, name) {
   }
 }
 
+// Geroy sotib olish uchun to'lov havolasi
+function heroInvoiceUrl() {
+  return bot.api.raw.createInvoiceLink({
+    title: '🦸 Shaxsiy geroy',
+    description: "Shaxsiy geroy: daraja, kuch, himoya va tungi hujum. Bir marta to'lanadi.",
+    payload: 'hero',
+    currency: 'XTR',
+    prices: [{ label: 'Geroy', amount: HERO_PRICE }],
+  });
+}
+
+async function heroInvoiceWs(ws) {
+  if (!bot || !db.COINS_ENABLED) return send(ws, { type: 'error', message: 'Geroy hozir mavjud emas' });
+  try {
+    send(ws, { type: 'invoice', url: await heroInvoiceUrl() });
+  } catch (e) {
+    console.error('hero invoice:', e.description || e.message);
+    send(ws, { type: 'error', message: "To'lov havolasini yaratib bo'lmadi" });
+  }
+}
+
 // O'yin tugaganda geroy bali: har kimga o'yin uchun, g'oliblarga qo'shimcha. Daraja oshsa, lichkaga xabar.
 async function heroPoints(game) {
   if (!db.COINS_ENABLED) return;
@@ -714,7 +763,15 @@ setInterval(() => {
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-app.use(express.static(path.join(__dirname, 'public')));
+// Siqib yuborish (sahifa 62 KB -> ~19 KB) va kesh: rol rasmlari bir hafta, sahifa har safar tekshiriladi
+app.use(compression());
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, file) => {
+    if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    else if (file.includes(`${path.sep}roles${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=604800');
+    else res.setHeader('Cache-Control', 'public, max-age=3600');
+  },
+}));
 app.get('/health', (_req, res) => res.json({ ok: true, games: games.size }));
 
 const server = http.createServer(app);
@@ -722,11 +779,26 @@ const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 512 * 1024 })
 
 const profileMsg = (pr) => ({
   type: 'profile', ...pr, shop: db.SHOP, packs: bot ? db.COIN_PACKS : [], bonus: db.DAILY_BONUS,
+  heroPrice: bot ? HERO_PRICE : null,
 });
 const send = (ws, msg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); };
 
+// Bir lahzada bir nechta o'zgarish bo'lsa, bitta yangilanish yuboramiz.
+// Ulanishga avvalgisi bilan bir xil holat qayta yuborilmaydi (ilova bekorga qayta chizilmaydi).
+const pendingBroadcast = new Set();
 function broadcast(game) {
-  for (const ws of game.clients) send(ws, game.viewFor(ws.user.id));
+  if (pendingBroadcast.has(game)) return;
+  pendingBroadcast.add(game);
+  setImmediate(() => {
+    pendingBroadcast.delete(game);
+    for (const ws of game.clients) {
+      if (ws.readyState !== ws.OPEN) continue;
+      const json = JSON.stringify(game.viewFor(ws.user.id));
+      if (json === ws.lastState) continue;
+      ws.lastState = json;
+      ws.send(json);
+    }
+  });
 }
 
 // Bosib gapirish: yozilgan ovozni o'yindagi hammaga yuboramiz (xotirada saqlanmaydi)
@@ -773,6 +845,8 @@ function handle(ws, msg) {
     ws.game?.clients.delete(ws);
     ws.user = user;
     ws.game = game;
+    ws.lastState = null;
+    send(ws, { type: 'roles', roles: ROLES }); // o'zgarmaydigan ma'lumot: bir marta
     game.clients.add(ws);
     if (db.COINS_ENABLED) {
       db.getProfile(user.id).then((pr) => send(ws, profileMsg(pr))).catch(() => {});
@@ -799,6 +873,7 @@ function handle(ws, msg) {
     case 'heroAttack': return game.heroAttack(user.id, Number(msg.target));
     case 'heroSkip': return game.heroSkip(user.id);
     case 'heroBuy': return void heroBuyWs(ws, String(msg.action || ''), msg.name);
+    case 'heroUnlock': return void heroInvoiceWs(ws);
     case 'act': {
       const targets = Array.isArray(msg.targets) ? msg.targets.slice(0, 2) : [msg.target];
       return game.act(user.id, targets, msg.mode);

@@ -1,5 +1,9 @@
 // YM coin balansi: Postgres (masalan, Neon). DATABASE_URL bo'lmasa, coin o'chiq.
 import pg from 'pg';
+import { HERO_SHOP, levelOf, maxDefense, cleanName, CHARGE_PACK, DEFENSE_DAYS, POINTS_PER_YM, POINTS_PER_STAR, heroView } from './hero.js';
+
+// Hali yaratilmagan geroy qanday ko'rinadi
+const NEW_HERO = { name: 'Geroy', points: 0, defense: 0, defense_until: null, charges: 0 };
 
 export const COIN_REWARD = Number(process.env.COIN_REWARD || 20);
 
@@ -64,6 +68,24 @@ export async function init() {
       coins INTEGER NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  // Shaxsiy geroylar
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS heroes (
+      player_id BIGINT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT 'Geroy',
+      points INTEGER NOT NULL DEFAULT 0,
+      defense INTEGER NOT NULL DEFAULT 0,
+      defense_until TIMESTAMPTZ,
+      charges INTEGER NOT NULL DEFAULT 0 -- zaryad faqat sotib olinadi
+    )`);
+  // Bot turgan guruhlar (/elon uchun)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bot_groups (
+      chat_id BIGINT PRIMARY KEY,
+      title TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
   // Guruh sozlamalari (/sozlamalar)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS group_settings (
@@ -91,11 +113,15 @@ const toProfile = (row, stats = {}) => ({
 // Balans, buyumlar va 1-tun hisoblagichi
 export async function getProfile(id) {
   if (!pool) return null;
-  const [{ rows }, wins] = await Promise.all([
+  const [{ rows }, wins, hero] = await Promise.all([
     pool.query(`SELECT *, ${BONUS_TAKEN} FROM players WHERE id = $1`, [id]),
     pool.query('SELECT role, wins FROM role_wins WHERE player_id = $1', [id]),
+    pool.query('SELECT * FROM heroes WHERE player_id = $1', [id]),
   ]);
-  return toProfile(rows[0], Object.fromEntries(wins.rows.map((r) => [r.role, r.wins])));
+  return {
+    ...toProfile(rows[0], Object.fromEntries(wins.rows.map((r) => [r.role, r.wins]))),
+    hero: heroView(hero.rows[0] || NEW_HERO),
+  };
 }
 
 export class ShopError extends Error {}
@@ -111,6 +137,7 @@ export async function buy(id, item) {
     [id, price],
   );
   if (!rows.length) throw new ShopError(`YM coin yetmaydi: ${price} YM kerak`);
+  await addHeroPoints([{ id, points: price * POINTS_PER_YM }]).catch(() => {});
   return toProfile(rows[0]);
 }
 
@@ -210,6 +237,11 @@ export async function addPurchasedCoins(chargeId, id, name, stars, coins) {
        ON CONFLICT (id) DO UPDATE SET coins = players.coins + $3, name = $2, updated_at = now() RETURNING coins`,
       [id, name, coins],
     );
+    await client.query(
+      `INSERT INTO heroes (player_id, points) VALUES ($1, $2)
+       ON CONFLICT (player_id) DO UPDATE SET points = heroes.points + $2`,
+      [id, stars * POINTS_PER_STAR],
+    );
     await client.query('COMMIT');
     return rows[0].coins;
   } catch (e) {
@@ -235,6 +267,22 @@ export async function getSettings(chatId) {
   return rows[0]?.settings || null;
 }
 
+// ---------- Bot turgan guruhlar ----------
+export async function rememberGroup(chatId, title, active = true) {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO bot_groups (chat_id, title, active) VALUES ($1, $2, $3)
+     ON CONFLICT (chat_id) DO UPDATE SET title = COALESCE($2, bot_groups.title), active = $3, updated_at = now()`,
+    [chatId, title || null, active],
+  );
+}
+
+export async function activeGroups() {
+  if (!pool) return [];
+  const { rows } = await pool.query('SELECT chat_id, title FROM bot_groups WHERE active ORDER BY chat_id');
+  return rows.map((r) => ({ id: Number(r.chat_id), title: r.title }));
+}
+
 export async function saveSettings(chatId, settings) {
   if (!pool) return;
   await pool.query(
@@ -242,4 +290,88 @@ export async function saveSettings(chatId, settings) {
      ON CONFLICT (chat_id) DO UPDATE SET settings = $2`,
     [chatId, JSON.stringify(settings)],
   );
+}
+
+// ---------- Shaxsiy geroy ----------
+
+// Geroyni olish (bo'lmasa, yangi geroy yaratiladi)
+export async function getHero(id) {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO heroes (player_id) VALUES ($1)
+     ON CONFLICT (player_id) DO UPDATE SET player_id = heroes.player_id RETURNING *`,
+    [id],
+  );
+  return rows[0];
+}
+
+// Ball qo'shish: [{ id, points }]. Qaytaradi: Map(id -> { before, after }) daraja o'zgarishini bilish uchun
+export async function addHeroPoints(list) {
+  const out = new Map();
+  if (!pool) return out;
+  for (const { id, points } of list) {
+    if (!points) continue;
+    const { rows } = await pool.query(
+      `INSERT INTO heroes (player_id, points) VALUES ($1, $2)
+       ON CONFLICT (player_id) DO UPDATE SET points = heroes.points + $2
+       RETURNING points`,
+      [id, points],
+    );
+    out.set(id, { before: rows[0].points - points, after: rows[0].points });
+  }
+  return out;
+}
+
+// Geroy do'koni: coin yechiladi va o'zgarish bir tranzaksiyada qilinadi
+export async function heroBuy(id, action, newName) {
+  if (!pool) throw new ShopError('Geroy hali yoqilmagan');
+  const item = HERO_SHOP[action];
+  if (!item) throw new ShopError("Bunday xarid yo'q");
+  let nm = null;
+  if (action === 'rename') {
+    nm = cleanName(newName);
+    if (!nm) throw new ShopError("Nom 2–20 belgi bo'lsin: harf, raqam, probel");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const pay = await client.query(
+      'UPDATE players SET coins = coins - $2, updated_at = now() WHERE id = $1 AND coins >= $2 RETURNING coins',
+      [id, item.price],
+    );
+    if (!pay.rows.length) throw new ShopError(`YM coin yetmaydi: ${item.price} YM kerak`);
+    await client.query('INSERT INTO heroes (player_id) VALUES ($1) ON CONFLICT DO NOTHING', [id]);
+    const cur = (await client.query('SELECT * FROM heroes WHERE player_id = $1 FOR UPDATE', [id])).rows[0];
+    // Sarflangan coin ham ball beradi (+1000 ball xaridining o'zidan tashqari)
+    const points = cur.points + (action === 'points' ? 1000 : item.price * POINTS_PER_YM);
+    const defense = action === 'defense' ? maxDefense(levelOf(points)) : cur.defense;
+    const until = action === 'defense' ? new Date(Date.now() + DEFENSE_DAYS * 86400000) : cur.defense_until;
+    const charges = action === 'charge' ? cur.charges + CHARGE_PACK : cur.charges;
+    const name = action === 'rename' ? nm : cur.name;
+    const hero = (await client.query(
+      `UPDATE heroes SET points = $2, defense = $3, defense_until = $4, charges = $5, name = $6
+       WHERE player_id = $1 RETURNING *`,
+      [id, points, defense, until, charges, name],
+    )).rows[0];
+    await client.query('COMMIT');
+    return { hero, coins: pay.rows[0].coins };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// O'yinda: bitta zaryad sarflash. Qaytaradi: true (sarflandi) yoki false (zaryad yo'q)
+export async function heroUseCharge(id) {
+  if (!pool) return false;
+  const res = await pool.query('UPDATE heroes SET charges = charges - 1 WHERE player_id = $1 AND charges > 0', [id]);
+  return res.rowCount > 0;
+}
+
+// O'yinda: hujumdan keyin qolgan himoya
+export async function heroSetDefense(id, defense) {
+  if (!pool) return;
+  await pool.query('UPDATE heroes SET defense = $2 WHERE player_id = $1', [id, Math.max(0, defense)]);
 }

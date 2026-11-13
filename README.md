@@ -114,6 +114,28 @@ Coin'lar saqlanishi uchun bepul Postgres kerak, masalan **Neon**:
 
 `DATABASE_URL` bo'lmasa, o'yin coin'siz ishlayveradi.
 
+## 🦸 Shaxsiy geroy
+
+Har bir o'yinchining o'z geroyi bor (`/geroy` botda yoki ilovada profil ustiga bosib).
+
+- **Daraja** ball bilan oshadi: 2-daraja 1100, 3-daraja 3000, keyin 6000, 10000 ... (10 darajagacha).
+  Har darajada kuch +10 (1-darajada 40–46) va maksimal himoya +20 (1-darajada 30).
+- **Ball:** o'yin uchun +50, g'alaba uchun +100, do'konda sarflangan har 1 YM uchun +1, Stars bilan coin olganda har 1⭐ uchun +10.
+- **Tunda** zaryadi bor o'yinchi rolidan qat'i nazar geroyi bilan bitta odamga hujum qiladi (1 zaryad).
+  Kuch nishonning geroy himoyasidan katta bo'lsa, hujum o'tadi va odam o'ladi. Doktor, Qo'riqchi va Himoya buyumi bu hujumdan ham qutqaradi.
+  Kichik bo'lsa, himoya kamayadi va nishon omon qoladi. Ma'shuqa band qilsa, hujum bo'lmaydi.
+- Tun zaryadi bor geroy egalari qaror qilmaguncha (hujum yoki «Hujumsiz») erta tugamaydi.
+- **Xaridlar (YM):** +1000 ball — 1000, himoyani to'ldirish (7 kun) — 300, zaryad +3 — 400, nomni o'zgartirish — 2000 (`/geroy_nom Yangi nom`).
+  Yangi geroyda zaryad yo'q. O'yin davomida sotib olib bo'lmaydi.
+
+## 📢 E'lon barcha guruhlarga (`/elon`)
+
+Bot qaysi guruhlarda turganini o'zi eslab qoladi (baza kerak). E'lonni faqat bot egasi yuboradi:
+1. Botga lichkada `/myid` yozing va chiqqan raqamni Render'da `OWNER_IDS` ga qo'shing (bir nechta bo'lsa, vergul bilan).
+2. E'lon matnini (rasm bilan ham bo'ladi) botga lichkada yozing.
+3. O'sha xabarga javob (reply) qilib `/elon` yozing: bot ko'rinishini ko'rsatadi va «✅ Yuborish» tugmasini beradi.
+Botni chiqarib yuborgan guruhlar keyingi safar ro'yxatdan o'tkazib yuboriladi.
+
 ## ⭐ Guruh obunasi
 
 `/newgame` faqat obunasi faol guruhda ishlaydi. Obuna bo'lmasa, bot «⭐ Obuna bo'lish» tugmasini yuboradi:
@@ -165,6 +187,7 @@ Don/Mafia, Qotillar va Komissar otadi → Omadli 70% omon qoladi → Komissar, J
 | `DAILY_BONUS` | 10 | Kunlik bonus (YM) |
 | `COIN_PACKS` | `50:100,100:250,250:700` | Coin paketlari: `stars:coin`, vergul bilan |
 | `TELEGRAM_API_ROOT` | — | Boshqa Bot API manzili (odatda kerak emas) |
+| `OWNER_IDS` | — | Bot egasining Telegram ID'si (`/elon` uchun), `/myid` bilan bilinadi |
 | `TEST_BOTS` | — | `1` bo'lsa, lobbida 🤖 test botlarini qo'shish mumkin |
 
 ## Kompyuterda sinash (Telegramsiz)
